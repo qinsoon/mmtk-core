@@ -6,9 +6,14 @@ use crate::vm::VMBinding;
 
 // Callback trait of scanning functions that report edges.
 pub trait EdgeVisitor {
-    /// Call this function for each edge.
+    /// Call this function for each strong reference edge.
     fn visit_edge(&mut self, edge: Address);
-    // TODO: Add visit_soft_edge, visit_weak_edge, ... here.
+    /// Call this function for each soft reference
+    fn visit_soft_ref(&mut self, reff: ObjectReference);
+    /// Call this function for each weak reference
+    fn visit_weak_ref(&mut self, reff: ObjectReference);
+    /// Call this function for each phantom reference
+    fn visit_phantom_ref(&mut self, reff: ObjectReference);
 }
 
 /// VM-specific methods for scanning roots/objects.

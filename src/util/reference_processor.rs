@@ -36,19 +36,34 @@ impl ReferenceProcessors {
         }
     }
 
-    pub fn add_soft_candidate<VM: VMBinding>(&self, reff: ObjectReference) {
+    pub fn add_soft_candidate(&self, reff: ObjectReference) {
         trace!("Add soft candidate: {}", reff);
-        self.soft.add_candidate::<VM>(reff);
+        self.soft.add_candidate(reff);
     }
 
-    pub fn add_weak_candidate<VM: VMBinding>(&self, reff: ObjectReference) {
+    pub fn add_soft_candidates(&self, refs: &[ObjectReference]) {
+        trace!("Add soft candidates: {:?}", refs);
+        self.soft.add_candidates(refs);
+    }
+
+    pub fn add_weak_candidate(&self, reff: ObjectReference) {
         trace!("Add weak candidate: {}", reff);
-        self.weak.add_candidate::<VM>(reff);
+        self.weak.add_candidate(reff);
     }
 
-    pub fn add_phantom_candidate<VM: VMBinding>(&self, reff: ObjectReference) {
+    pub fn add_weak_candidates(&self, refs: &[ObjectReference]) {
+        trace!("Add weak candidates: {:?}", refs);
+        self.weak.add_candidates(refs);
+    }
+
+    pub fn add_phantom_candidate(&self, reff: ObjectReference) {
         trace!("Add phantom candidate: {}", reff);
-        self.phantom.add_candidate::<VM>(reff);
+        self.phantom.add_candidate(reff);
+    }
+
+    pub fn add_phantom_candidates(&self, refs: &[ObjectReference]) {
+        trace!("Add phantom candidates: {:?}", refs);
+        self.phantom.add_candidates(refs);
     }
 
     /// This will invoke enqueue for each reference processor, which will
@@ -195,13 +210,22 @@ impl ReferenceProcessor {
 
     /// Add a candidate.
     #[inline(always)]
-    pub fn add_candidate<VM: VMBinding>(&self, reff: ObjectReference) {
+    pub fn add_candidate(&self, reff: ObjectReference) {
         if !self.allow_new_candidate.load(Ordering::SeqCst) {
             return;
         }
 
         let mut sync = self.sync.lock().unwrap();
         sync.references.insert(reff);
+    }
+
+    pub fn add_candidates(&self, refs: &[ObjectReference]) {
+        if !self.allow_new_candidate.load(Ordering::SeqCst) {
+            return;
+        }
+
+        let mut sync = self.sync.lock().unwrap();
+        sync.references.extend(refs);
     }
 
     fn disallow_new_candidate(&self) {
@@ -561,5 +585,42 @@ impl<VM: VMBinding> GCWork<VM> for RefEnqueue<VM> {
 impl<VM: VMBinding> RefEnqueue<VM> {
     pub fn new() -> Self {
         Self(PhantomData)
+    }
+}
+
+pub struct ReferenceBuffer {
+    soft_refs: Vec<ObjectReference>,
+    weak_refs: Vec<ObjectReference>,
+    phantom_refs: Vec<ObjectReference>,
+}
+
+impl ReferenceBuffer {
+    pub fn new() -> Self {
+        Self {
+            soft_refs: vec![],
+            weak_refs: vec![],
+            phantom_refs: vec![],
+        }
+    }
+
+    #[inline(always)]
+    pub fn add_soft_ref(&mut self, reff: ObjectReference) {
+        self.soft_refs.push(reff);
+    }
+
+    #[inline(always)]
+    pub fn add_weak_ref(&mut self, reff: ObjectReference) {
+        self.weak_refs.push(reff);
+    }
+
+    #[inline(always)]
+    pub fn add_phantom_ref(&mut self, reff: ObjectReference) {
+        self.phantom_refs.push(reff);
+    }
+
+    pub fn flush(&self, reference_processor: &ReferenceProcessors) {
+        reference_processor.add_soft_candidates(&self.soft_refs);
+        reference_processor.add_weak_candidates(&self.weak_refs);
+        reference_processor.add_phantom_candidates(&self.phantom_refs);
     }
 }
