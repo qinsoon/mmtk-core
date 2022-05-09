@@ -618,17 +618,20 @@ impl ReferenceBuffer {
         self.phantom_refs.push(reff);
     }
 
-    pub fn flush(&self, reference_processor: &ReferenceProcessors) {
+    pub fn flush(&mut self, reference_processor: &ReferenceProcessors) {
         if !self.soft_refs.is_empty() {
             reference_processor.add_soft_candidates(&self.soft_refs);
+            self.soft_refs.clear();
         }
 
         if !self.weak_refs.is_empty() {
             reference_processor.add_weak_candidates(&self.weak_refs);
+            self.weak_refs.clear();
         }
 
         if !self.phantom_refs.is_empty() {
             reference_processor.add_phantom_candidates(&self.phantom_refs);
+            self.phantom_refs.clear();
         }
     }
 }
