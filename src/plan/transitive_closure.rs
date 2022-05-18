@@ -23,12 +23,12 @@ impl<T: ProcessEdgesWork> TransitiveClosure for T {
     }
 }
 
-use crate::util::reference_processor::ReferenceBuffer;
+// use crate::util::reference_processor::ReferenceBuffer;
 
 /// A transitive closure visitor to collect all the edges of an object.
 pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
     buffer: Vec<Address>,
-    weak_ref_buffer: ReferenceBuffer,
+    // weak_ref_buffer: ReferenceBuffer,
     worker: &'a mut GCWorker<E::VM>,
 }
 
@@ -36,7 +36,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
     pub fn new(worker: &'a mut GCWorker<E::VM>) -> Self {
         Self {
             buffer: vec![],
-            weak_ref_buffer: ReferenceBuffer::new(),
+            // weak_ref_buffer: ReferenceBuffer::new(),
             worker,
         }
     }
@@ -48,7 +48,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
             WorkBucketStage::Closure,
             E::new(new_edges, false, self.worker.mmtk),
         );
-        self.weak_ref_buffer.flush(&self.worker.mmtk.reference_processors);
+        // self.weak_ref_buffer.flush(&self.worker.mmtk.reference_processors);
     }
 }
 
@@ -71,15 +71,18 @@ impl<'a, E: ProcessEdgesWork> EdgeVisitor for ObjectsClosure<'a, E> {
 
     #[inline(always)]
     fn visit_soft_ref(&mut self, reff: ObjectReference) {
-        self.weak_ref_buffer.add_soft_ref(reff)
+        // self.weak_ref_buffer.add_soft_ref(reff)
+        self.worker.reference_buffer.add_soft_ref(reff)
     }
     #[inline(always)]
     fn visit_weak_ref(&mut self, reff: ObjectReference) {
-        self.weak_ref_buffer.add_weak_ref(reff)
+        // self.weak_ref_buffer.add_weak_ref(reff)
+        self.worker.reference_buffer.add_weak_ref(reff)
     }
     #[inline(always)]
     fn visit_phantom_ref(&mut self, reff: ObjectReference) {
-        self.weak_ref_buffer.add_phantom_ref(reff)
+        // self.weak_ref_buffer.add_phantom_ref(reff)
+        self.worker.reference_buffer.add_phantom_ref(reff)
     }
 }
 

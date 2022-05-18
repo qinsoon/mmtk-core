@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex};
 
+use crate::util::reference_processor::ReferenceBuffer;
+
 const LOCALLY_CACHED_WORKS: usize = 1;
 
 /// The part shared between a GCWorker and the scheduler.
@@ -55,6 +57,7 @@ pub struct GCWorker<VM: VMBinding> {
     /// Cache of work packets created by the current worker.
     /// May be flushed to the global pool or executed locally.
     local_work_buffer: Vec<(WorkBucketStage, Box<dyn GCWork<VM>>)>,
+    pub reference_buffer: ReferenceBuffer,
     /// Reference to the shared part of the GC worker.  It is used for synchronization.
     pub shared: Arc<GCWorkerShared<VM>>,
 }
@@ -99,6 +102,7 @@ impl<VM: VMBinding> GCWorker<VM> {
             mmtk,
             is_coordinator,
             local_work_buffer: Vec::with_capacity(LOCALLY_CACHED_WORKS),
+            reference_buffer: ReferenceBuffer::new(),
             shared,
         }
     }
