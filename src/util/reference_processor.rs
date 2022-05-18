@@ -278,9 +278,13 @@ impl ReferenceProcessor {
         e.trace_object(referent)
     }
 
-    pub fn split_ref_table(&self, n_threads: usize) -> Vec<Vec<ObjectReference>> {
+    pub fn split_ref_table(&self, n_threads: usize, drain: bool) -> Vec<Vec<ObjectReference>> {
         let mut sync = self.sync.lock().unwrap();
-        let refs: Vec<ObjectReference> = sync.references.drain().collect();
+        let refs: Vec<ObjectReference> = if drain {
+            sync.references.drain().collect()
+        } else {
+            sync.references.iter().cloned().collect()
+        };
 
         let refs_per_work_packet = if Self::MAX_REFERENCES_PER_WORK_PACKET * n_threads > refs.len() {
             Self::MAX_REFERENCES_PER_WORK_PACKET
@@ -627,7 +631,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for MTPrepareRetainRefs<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         let ref ref_processor = mmtk.reference_processors.soft;
         // Split work
-        let mut ref_chunks: Vec<Vec<ObjectReference>> = ref_processor.split_ref_table(*mmtk.get_options().threads);
+        let mut ref_chunks: Vec<Vec<ObjectReference>> = ref_processor.split_ref_table(*mmtk.get_options().threads, false);
         let packets = ref_chunks.drain(..).map(|refs| Box::new(MTRetainRefs::<E> { refs, _p: PhantomData }) as Box<dyn GCWork<E::VM>>).collect();
         mmtk.scheduler.work_buckets[crate::scheduler::WorkBucketStage::SoftRefClosure].bulk_add(packets);
     }
@@ -658,21 +662,21 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for MTPrepareScanRefs<E> {
         // scan soft refs
         let ref soft_ref_processor = mmtk.reference_processors.soft;
         // Split work
-        let mut ref_chunks: Vec<Vec<ObjectReference>> = soft_ref_processor.split_ref_table(*mmtk.get_options().threads);
+        let mut ref_chunks: Vec<Vec<ObjectReference>> = soft_ref_processor.split_ref_table(*mmtk.get_options().threads, true);
         let packets = ref_chunks.drain(..).map(|refs| Box::new(MTScanRefs::<E> { refs, semantic: Semantics::SOFT, _p: PhantomData }) as Box<dyn GCWork<E::VM>>).collect();
         mmtk.scheduler.work_buckets[crate::scheduler::WorkBucketStage::WeakRefClosure].bulk_add(packets);
 
         // scan weak refs
         let ref weak_ref_processor = mmtk.reference_processors.weak;
         // Split work
-        let mut ref_chunks: Vec<Vec<ObjectReference>> = weak_ref_processor.split_ref_table(*mmtk.get_options().threads);
+        let mut ref_chunks: Vec<Vec<ObjectReference>> = weak_ref_processor.split_ref_table(*mmtk.get_options().threads, true);
         let packets = ref_chunks.drain(..).map(|refs| Box::new(MTScanRefs::<E> { refs, semantic: Semantics::WEAK, _p: PhantomData }) as Box<dyn GCWork<E::VM>>).collect();
         mmtk.scheduler.work_buckets[crate::scheduler::WorkBucketStage::WeakRefClosure].bulk_add(packets);
 
         // scan phantom refs
         let ref phantom_ref_processor = mmtk.reference_processors.phantom;
         // Split work
-        let mut ref_chunks: Vec<Vec<ObjectReference>> = phantom_ref_processor.split_ref_table(*mmtk.get_options().threads);
+        let mut ref_chunks: Vec<Vec<ObjectReference>> = phantom_ref_processor.split_ref_table(*mmtk.get_options().threads, true);
         let packets = ref_chunks.drain(..).map(|refs| Box::new(MTScanRefs::<E> { refs, semantic: Semantics::PHANTOM, _p: PhantomData }) as Box<dyn GCWork<E::VM>>).collect();
         mmtk.scheduler.work_buckets[crate::scheduler::WorkBucketStage::PhantomRefClosure].bulk_add(packets);
     }
