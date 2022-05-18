@@ -663,11 +663,18 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for MTPrepareScanRefs<E> {
         mmtk.scheduler.work_buckets[crate::scheduler::WorkBucketStage::WeakRefClosure].bulk_add(packets);
 
         // scan weak refs
-        let ref weak_ref_processor = mmtk.reference_processors.soft;
+        let ref weak_ref_processor = mmtk.reference_processors.weak;
         // Split work
         let mut ref_chunks: Vec<Vec<ObjectReference>> = weak_ref_processor.split_ref_table(*mmtk.get_options().threads);
         let packets = ref_chunks.drain(..).map(|refs| Box::new(MTScanRefs::<E> { refs, semantic: Semantics::WEAK, _p: PhantomData }) as Box<dyn GCWork<E::VM>>).collect();
         mmtk.scheduler.work_buckets[crate::scheduler::WorkBucketStage::WeakRefClosure].bulk_add(packets);
+
+        // scan phantom refs
+        let ref phantom_ref_processor = mmtk.reference_processors.phantom;
+        // Split work
+        let mut ref_chunks: Vec<Vec<ObjectReference>> = phantom_ref_processor.split_ref_table(*mmtk.get_options().threads);
+        let packets = ref_chunks.drain(..).map(|refs| Box::new(MTScanRefs::<E> { refs, semantic: Semantics::PHANTOM, _p: PhantomData }) as Box<dyn GCWork<E::VM>>).collect();
+        mmtk.scheduler.work_buckets[crate::scheduler::WorkBucketStage::PhantomRefClosure].bulk_add(packets);
     }
 }
 impl<E: ProcessEdgesWork> MTPrepareScanRefs<E> {
