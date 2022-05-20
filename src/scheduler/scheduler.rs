@@ -211,15 +211,24 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         // Reference processing
         if !*plan.base().options.no_reference_types {
-            use crate::util::reference_processor::{
-                PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
-            };
-            self.work_buckets[WorkBucketStage::SoftRefClosure]
-                .add(SoftRefProcessing::<C::ProcessEdgesWorkType>::new());
-            self.work_buckets[WorkBucketStage::WeakRefClosure]
-                .add(WeakRefProcessing::<C::ProcessEdgesWorkType>::new());
-            self.work_buckets[WorkBucketStage::PhantomRefClosure]
-                .add(PhantomRefProcessing::<C::ProcessEdgesWorkType>::new());
+            if *plan.base().options.multithread_reference_processing {
+                use crate::util::reference_processor::{MTPrepareRetainRefs, MTPrepareScanRefs};
+                self.work_buckets[WorkBucketStage::SoftRefClosure]
+                    .add(MTPrepareRetainRefs::<C::ProcessEdgesWorkType>::new());
+                self.work_buckets[WorkBucketStage::WeakRefClosure]
+                    .add(MTPrepareScanRefs::<C::ProcessEdgesWorkType>::new());
+            } else {
+                use crate::util::reference_processor::{
+                    PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
+                };
+
+                self.work_buckets[WorkBucketStage::SoftRefClosure]
+                    .add(SoftRefProcessing::<C::ProcessEdgesWorkType>::new());
+                self.work_buckets[WorkBucketStage::WeakRefClosure]
+                    .add(WeakRefProcessing::<C::ProcessEdgesWorkType>::new());
+                self.work_buckets[WorkBucketStage::PhantomRefClosure]
+                    .add(PhantomRefProcessing::<C::ProcessEdgesWorkType>::new());
+            }
 
             // VM-specific weak ref processing
             self.work_buckets[WorkBucketStage::WeakRefClosure]
