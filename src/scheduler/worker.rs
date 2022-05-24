@@ -9,7 +9,7 @@ use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex};
-
+use std::sync::atomic::AtomicUsize;
 use crate::util::reference_processor::ReferenceBuffer;
 
 const LOCALLY_CACHED_WORKS: usize = 1;
@@ -17,6 +17,7 @@ const LOCALLY_CACHED_WORKS: usize = 1;
 /// The part shared between a GCWorker and the scheduler.
 /// This structure is used for communication, e.g. adding new work packets.
 pub struct GCWorkerShared<VM: VMBinding> {
+    pub ordinal: AtomicUsize,
     /// True if the GC worker is parked.
     pub parked: AtomicBool,
     /// Worker-local statistics data.
@@ -28,6 +29,7 @@ pub struct GCWorkerShared<VM: VMBinding> {
 impl<VM: VMBinding> GCWorkerShared<VM> {
     pub fn new(worker_monitor: Arc<(Mutex<()>, Condvar)>) -> Self {
         Self {
+            ordinal: AtomicUsize::new(usize::MAX),
             parked: AtomicBool::new(true),
             stat: Default::default(),
             local_work_bucket: WorkBucket::new(true, worker_monitor),
@@ -92,6 +94,7 @@ impl<VM: VMBinding> GCWorker<VM> {
         sender: Sender<CoordinatorMessage<VM>>,
         shared: Arc<GCWorkerShared<VM>>,
     ) -> Self {
+        shared.ordinal.store(ordinal, Ordering::SeqCst);
         Self {
             tls: VMWorkerThread(VMThread::UNINITIALIZED),
             ordinal,

@@ -57,6 +57,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             WorkBucketStage::Unconstrained => WorkBucket::new(true, worker_monitor.clone()),
             WorkBucketStage::Prepare => WorkBucket::new(false, worker_monitor.clone()),
             WorkBucketStage::Closure => WorkBucket::new(false, worker_monitor.clone()),
+            WorkBucketStage::ClosureEnd => WorkBucket::new(false, worker_monitor.clone()),
             WorkBucketStage::SoftRefClosure => WorkBucket::new(false, worker_monitor.clone()),
             WorkBucketStage::WeakRefClosure => WorkBucket::new(false, worker_monitor.clone()),
             WorkBucketStage::FinalRefClosure => WorkBucket::new(false, worker_monitor.clone()),
@@ -81,6 +82,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 work_buckets[s].set_open_condition(move |scheduler: &GCWorkScheduler<VM>| {
                     let should_open = scheduler.are_buckets_drained(&cur_stages)
                         && scheduler.all_workers_parked();
+                    if should_open {
+                        info!("{:?} is open", s);
+                    }
                     // Additional check before the `RefClosure` bucket opens.
                     if should_open && s == crate::scheduler::work_bucket::LAST_CLOSURE_BUCKET {
                         if let Some(closure_end) = scheduler.closure_end.lock().unwrap().as_ref() {
@@ -96,6 +100,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             };
 
             open_next(Closure);
+            open_next(ClosureEnd);
             open_next(SoftRefClosure);
             open_next(WeakRefClosure);
             open_next(FinalRefClosure);
@@ -211,6 +216,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         // Reference processing
         if !*plan.base().options.no_reference_types {
+            use crate::util::reference_processor::ScheduleFlushWorkerRefBuffer;
+            self.work_buckets[WorkBucketStage::ClosureEnd].add(ScheduleFlushWorkerRefBuffer::default());
+
             if *plan.base().options.multithread_reference_processing {
                 use crate::util::reference_processor::{MTPrepareRetainRefs, MTPrepareScanRefs};
                 self.work_buckets[WorkBucketStage::SoftRefClosure]
@@ -376,10 +384,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     .send(CoordinatorMessage::AllWorkerParked)
                     .unwrap();
             }
+            trace!("Worker#{} parked", worker.ordinal);
             // Wait
             guard = self.worker_monitor.1.wait(guard).unwrap();
             // Unpark this worker
             worker.shared.parked.store(false, Ordering::SeqCst);
+            trace!("Worker#{} unparked", worker.ordinal);
         }
     }
 

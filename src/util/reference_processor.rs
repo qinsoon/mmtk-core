@@ -774,3 +774,29 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for MTScanRefs<E> {
         w.flush();
     }
 }
+
+#[derive(Default)]
+pub struct ScheduleFlushWorkerRefBuffer;
+impl<VM: VMBinding> GCWork<VM> for ScheduleFlushWorkerRefBuffer {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        for w in mmtk.scheduler.workers_shared.iter() {
+            w.local_work_bucket.add(FlushWorkerRefBuffer);
+            info!("Scheduled FlushWorkerRefBuffer to #{} (by #{})", w.ordinal.load(Ordering::SeqCst), _worker.ordinal);
+        }
+        let _guard = mmtk.scheduler.worker_monitor.0.lock().unwrap();
+        mmtk.scheduler.worker_monitor.1.notify_all();
+    }
+}
+use crate::scheduler::CoordinatorWork;
+impl<VM: VMBinding> CoordinatorWork<VM> for ScheduleFlushWorkerRefBuffer {}
+
+// Flush worker ref buffer
+#[derive(Default)]
+pub struct FlushWorkerRefBuffer;
+impl<VM: VMBinding> GCWork<VM> for FlushWorkerRefBuffer {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        // info!("FlushWorkerRefBuffer{}", worker.ordinal);
+        assert!(!mmtk.scheduler.work_buckets[crate::scheduler::WorkBucketStage::SoftRefClosure].is_activated(), "RefClosure bucket was opened before we flush worker ref buffer");
+        worker.reference_buffer.flush(&mmtk.reference_processors);
+    }
+}
