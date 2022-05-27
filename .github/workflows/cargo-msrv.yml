@@ -1,9 +1,13 @@
 name: Minimal Supported Rust Version
 
+# on:
+  # pull_request:
+  #   branches:
+  #     - master
 on:
-  pull_request:
-    branches:
-      - master
+  push:
+    branches-ignore:
+      - '**'
 
 jobs:
   msrv:

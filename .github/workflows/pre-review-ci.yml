@@ -1,9 +1,13 @@
 name: Pre Code Review Checks
 
+# on:
+  # pull_request:
+  #   branches:
+  #     - master
 on:
-  pull_request:
-    branches:
-      - master
+  push:
+    branches-ignore:
+      - '**'
 
 jobs:
   # Setup dynamic test matrix
