@@ -9,7 +9,7 @@ on:
 jobs:
   # Figure out binding PRs.
   binding-refs:
-    if: contains(github.event.pull_request.labels.*.name, 'PR-testing')
+    # if: contains(github.event.pull_request.labels.*.name, 'PR-testing')
     uses: ./.github/workflows/pr-binding-refs.yml
     with:
       pull_request: ${{ github.event.pull_request.number }}
@@ -82,7 +82,7 @@ jobs:
   jikesrvm-binding-test:
     runs-on: ubuntu-18.04
     needs: binding-refs
-    if: contains(github.event.pull_request.labels.*.name, 'PR-testing')
+    # if: contains(github.event.pull_request.labels.*.name, 'PR-testing')
     steps:
       - name: Checkout MMTk Core
         uses: actions/checkout@v2
