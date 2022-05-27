@@ -110,6 +110,7 @@ jobs:
           sed -i 's/, "release_max_level_off"//g' repos/mmtk-core/Cargo.toml
           sed -i 's/, "release_max_level_off"//g' mmtk/Cargo.toml
           export RUST_BACKTRACE=1
+          sed -i 's/MMTK_THREADS=16/MMTK_THREADS=1/g' ./.github/scripts/ci-test-weak-ref.sh
           # export RUST_LOG=info,mmtk::scheduler::work=debug
           # export MMTK_THREADS=1
           ./.github/scripts/ci-test-weak-ref.sh
