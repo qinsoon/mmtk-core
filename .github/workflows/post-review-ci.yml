@@ -108,5 +108,5 @@ jobs:
         run: |
           cd mmtk-jikesrvm
           export RUST_BACKTRACE=1
-          ./.github/scripts/ci-test.sh
+          ./.github/scripts/ci-test-weak-ref.sh
           ./.github/scripts/ci-style.sh
