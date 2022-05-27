@@ -107,6 +107,10 @@ jobs:
       - name: Test
         run: |
           cd mmtk-jikesrvm
+          sed -i 's/, "release_max_level_off"//g' repos/mmtk-core/Cargo.toml
+          sed -i 's/, "release_max_level_off"//g' mmtk/Cargo.toml
           export RUST_BACKTRACE=1
+          # export RUST_LOG=info,mmtk::scheduler::work=debug
+          export MMTK_THREADS=1
           ./.github/scripts/ci-test-weak-ref.sh
           ./.github/scripts/ci-style.sh
