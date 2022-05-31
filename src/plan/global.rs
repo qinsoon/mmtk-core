@@ -835,6 +835,9 @@ impl<VM: VMBinding> BasePlan<VM> {
         #[cfg(feature = "vm_space")]
         self.vm_space
             .verify_side_metadata_sanity(side_metadata_sanity_checker);
+
+        // verify binding's side metadata.
+        VM::VMActivePlan::vm_verify_side_metadata_sanity(side_metadata_sanity_checker);
     }
 }
 

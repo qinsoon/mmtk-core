@@ -2,6 +2,7 @@ use crate::plan::Mutator;
 use crate::plan::Plan;
 use crate::util::opaque_pointer::*;
 use crate::vm::VMBinding;
+use crate::util::metadata::side_metadata::SideMetadataSanity;
 use std::marker::PhantomData;
 use std::sync::MutexGuard;
 
@@ -68,4 +69,19 @@ pub trait ActivePlan<VM: VMBinding> {
 
     /// Return the total count of mutators.
     fn number_of_mutators() -> usize;
+
+    /// This method is intended for a binding to verify any side metadata they define (note this does not include any spec
+    /// in `ObjectModel` that are side metadata).
+    ///
+    /// MMTk has a side metadata module, and MMTk internally uses it. However, the module
+    /// is public, and a binding could use it to store metadata for their convinience. If a binding defines side metadata specs with MMTk,
+    /// they are required to wrap the specs into [`SideMetadataContext`](crate::util::metadata::side_metadata::SideMetadataContext),
+    /// and call `checker.verify_metadata_context("[your binding name or something]", your_context)` in this
+    /// method. Otherwise, when the `extreme_assertions` feature is enabled, MMTk will panic as
+    /// it is not aware of the side metadata defined by a binding.
+    ///
+    /// If a binding does not use MMTk's side metadata, they can leave this as empty (the default implementation).
+    fn vm_verify_side_metadata_sanity(checker: &mut SideMetadataSanity) {
+
+    }
 }

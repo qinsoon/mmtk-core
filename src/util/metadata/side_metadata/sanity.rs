@@ -266,7 +266,7 @@ impl SideMetadataSanity {
     /// 2 - uses exclusive SideMetadata instances (v.s. static instances), and
     /// 3 - uses `util::test_util::with_cleanup` to call `sanity::reset` to cleanup the metadata sanity states to prevent future conflicts.
     ///
-    pub(crate) fn verify_metadata_context(
+    pub fn verify_metadata_context(
         &mut self,
         policy_name: &'static str,
         metadata_context: &SideMetadataContext,
