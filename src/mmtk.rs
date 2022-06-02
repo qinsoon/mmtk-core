@@ -42,7 +42,7 @@ pub static SFT_MAP: InitializeOnce<SFTMap<'static>> = InitializeOnce::new();
 /// *Note that multi-instances is not fully supported yet*
 pub struct MMTK<VM: VMBinding> {
     pub(crate) plan: Box<dyn Plan<VM = VM>>,
-    pub(crate) reference_processors: ReferenceProcessors,
+    pub(crate) reference_processors: Arc<ReferenceProcessors>,
     pub(crate) finalizable_processor: Mutex<FinalizableProcessor>,
     pub(crate) options: Arc<UnsafeOptionsWrapper>,
     pub(crate) scheduler: Arc<GCWorkScheduler<VM>>,
@@ -75,7 +75,7 @@ impl<VM: VMBinding> MMTK<VM> {
         );
         MMTK {
             plan,
-            reference_processors: ReferenceProcessors::new(),
+            reference_processors: Arc::new(ReferenceProcessors::new()),
             finalizable_processor: Mutex::new(FinalizableProcessor::new()),
             options,
             scheduler,

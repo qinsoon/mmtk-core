@@ -85,6 +85,10 @@ impl<VM: VMBinding> GCWork<VM> for PrepareCollector {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         trace!("Prepare Collector");
         worker.get_copy_context_mut().prepare();
+        debug_assert!(worker.reference_buffer.soft_refs.is_empty());
+        debug_assert!(worker.reference_buffer.weak_refs.is_empty());
+        debug_assert!(worker.reference_buffer.phantom_refs.is_empty());
+        worker.reference_buffer.do_buffer.store(true, std::sync::atomic::Ordering::SeqCst);
         mmtk.plan.prepare_worker(worker);
     }
 }

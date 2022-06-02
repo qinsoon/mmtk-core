@@ -96,7 +96,7 @@ impl<VM: VMBinding> GCWorker<VM> {
             scheduler,
             mmtk,
             is_coordinator,
-            reference_buffer: ReferenceBuffer::new(),
+            reference_buffer: ReferenceBuffer::new(mmtk.reference_processors.clone()),
             shared,
             local_work_buffer,
         }

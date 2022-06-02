@@ -646,15 +646,21 @@ impl<VM: VMBinding> RefEnqueue<VM> {
     }
 }
 
+use std::sync::Arc;
+
 pub struct ReferenceBuffer {
-    soft_refs: Vec<ObjectReference>,
-    weak_refs: Vec<ObjectReference>,
-    phantom_refs: Vec<ObjectReference>,
+    pub do_buffer: AtomicBool,
+    reference_processors: Arc<ReferenceProcessors>,
+    pub soft_refs: Vec<ObjectReference>,
+    pub weak_refs: Vec<ObjectReference>,
+    pub phantom_refs: Vec<ObjectReference>,
 }
 
 impl ReferenceBuffer {
-    pub fn new() -> Self {
+    pub fn new(reference_processors: Arc<ReferenceProcessors>) -> Self {
         Self {
+            do_buffer: AtomicBool::new(true),
+            reference_processors,
             soft_refs: vec![],
             weak_refs: vec![],
             phantom_refs: vec![],
@@ -663,32 +669,44 @@ impl ReferenceBuffer {
 
     #[inline(always)]
     pub fn add_soft_ref(&mut self, reff: ObjectReference) {
-        self.soft_refs.push(reff);
+        if self.do_buffer.load(Ordering::Relaxed) {
+            self.soft_refs.push(reff);
+        } else {
+            self.reference_processors.get(Semantics::SOFT).add_candidate(reff);
+        }
     }
 
     #[inline(always)]
     pub fn add_weak_ref(&mut self, reff: ObjectReference) {
-        self.weak_refs.push(reff);
+        if self.do_buffer.load(Ordering::Relaxed) {
+            self.weak_refs.push(reff);
+        } else {
+            self.reference_processors.get(Semantics::WEAK).add_candidate(reff);
+        }
     }
 
     #[inline(always)]
     pub fn add_phantom_ref(&mut self, reff: ObjectReference) {
-        self.phantom_refs.push(reff);
+        if self.do_buffer.load(Ordering::Relaxed) {
+            self.phantom_refs.push(reff);
+        } else {
+            self.reference_processors.get(Semantics::PHANTOM).add_candidate(reff);
+        }
     }
 
-    pub fn flush(&mut self, reference_processor: &ReferenceProcessors) {
+    pub fn flush(&mut self) {
         if !self.soft_refs.is_empty() {
-            reference_processor.add_soft_candidates(&self.soft_refs);
+            self.reference_processors.add_soft_candidates(&self.soft_refs);
             self.soft_refs.clear();
         }
 
         if !self.weak_refs.is_empty() {
-            reference_processor.add_weak_candidates(&self.weak_refs);
+            self.reference_processors.add_weak_candidates(&self.weak_refs);
             self.weak_refs.clear();
         }
 
         if !self.phantom_refs.is_empty() {
-            reference_processor.add_phantom_candidates(&self.phantom_refs);
+            self.reference_processors.add_phantom_candidates(&self.phantom_refs);
             self.phantom_refs.clear();
         }
     }
@@ -795,6 +813,7 @@ impl<VM: VMBinding> GCWork<VM> for FlushWorkerRefBuffer {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         // info!("FlushWorkerRefBuffer{}", worker.ordinal);
         assert!(!mmtk.scheduler.work_buckets[crate::scheduler::WorkBucketStage::SoftRefClosure].is_activated(), "RefClosure bucket was opened before we flush worker ref buffer");
-        worker.reference_buffer.flush(&mmtk.reference_processors);
+        worker.reference_buffer.flush();
+        worker.reference_buffer.do_buffer.store(false, Ordering::SeqCst);
     }
 }
