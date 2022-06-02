@@ -76,20 +76,25 @@ impl<VM: VMBinding> GCController<VM> {
 
         // Drain the message queue and execute coordinator work.
         loop {
-            let message = self.receiver.recv().unwrap();
-            match message {
+            match self.receiver.recv().unwrap() {
                 CoordinatorMessage::Work(mut work) => {
                     work.do_work_with_stat(worker, mmtk);
                 }
-                CoordinatorMessage::AllWorkerParked | CoordinatorMessage::BucketDrained => {
-                    self.scheduler.update_buckets();
+                CoordinatorMessage::Finish => {
+                    // Quit only if all the buckets are empty.
+                    // For concurrent GCs, the coordinator thread may receive this message when
+                    // some buckets are still not empty. Under such case, the coordinator
+                    // should ignore the message.
+                    let _guard = self.scheduler.worker_monitor.0.lock().unwrap();
+                    if self.scheduler.worker_group.all_parked()
+                        && self.scheduler.all_buckets_empty()
+                    {
+                        break;
+                    }
                 }
             }
-            let _guard = self.scheduler.worker_monitor.0.lock().unwrap();
-            if self.scheduler.all_workers_parked() && self.scheduler.all_buckets_empty() {
-                break;
-            }
         }
+        debug_assert!(!self.scheduler.worker_group.has_designated_work());
         for message in self.receiver.try_iter() {
             if let CoordinatorMessage::Work(mut work) = message {
                 work.do_work_with_stat(worker, mmtk);

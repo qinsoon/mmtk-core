@@ -111,8 +111,6 @@ impl ReferenceProcessors {
 
     /// Scan weak references.
     pub fn scan_weak_refs<E: ProcessEdgesWork>(&self, trace: &mut E, mmtk: &'static MMTK<E::VM>) {
-        self.soft
-            .scan::<E>(trace, mmtk.plan.is_current_gc_nursery());
         self.weak
             .scan::<E>(trace, mmtk.plan.is_current_gc_nursery());
     }
@@ -779,9 +777,9 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for MTScanRefs<E> {
 pub struct ScheduleFlushWorkerRefBuffer;
 impl<VM: VMBinding> GCWork<VM> for ScheduleFlushWorkerRefBuffer {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        for w in mmtk.scheduler.workers_shared.iter() {
-            w.local_work_bucket.add(FlushWorkerRefBuffer);
-            info!("Scheduled FlushWorkerRefBuffer to #{} (by #{})", w.ordinal.load(Ordering::SeqCst), _worker.ordinal);
+        for w in mmtk.scheduler.worker_group.workers_shared.iter() {
+            w.designated_work.push(Box::new(FlushWorkerRefBuffer));
+            // info!("Scheduled FlushWorkerRefBuffer to #{} (by #{})", w.ordinal.load(Ordering::SeqCst), _worker.ordinal);
         }
         let _guard = mmtk.scheduler.worker_monitor.0.lock().unwrap();
         mmtk.scheduler.worker_monitor.1.notify_all();
