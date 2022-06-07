@@ -10,6 +10,7 @@ use crossbeam::deque::{self, Steal};
 use enum_map::Enum;
 use enum_map::{enum_map, EnumMap};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -41,6 +42,8 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// the `Closure` bucket multiple times to iteratively discover and process
     /// more ephemeron objects.
     closure_end: Mutex<Option<Box<dyn Send + Fn() -> bool>>>,
+    /// Counter for pending coordinator messages.
+    pub(super) pending_messages: AtomicUsize,
 }
 
 // FIXME: GCWorkScheduler should be naturally Sync, but we cannot remove this `impl` yet.
@@ -113,6 +116,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             coordinator_worker_shared,
             worker_monitor,
             closure_end: Mutex::new(None),
+            pending_messages: AtomicUsize::new(0),
         })
     }
 
@@ -183,15 +187,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         // Reference processing
         if !*plan.base().options.no_reference_types {
             use crate::util::reference_processor::ScheduleFlushWorkerRefBuffer;
-            self.work_buckets[WorkBucketStage::ClosureEnd].add(ScheduleFlushWorkerRefBuffer::default());
+            self.work_buckets[WorkBucketStage::ClosureEnd].add(ScheduleFlushWorkerRefBuffer::<C::ProcessEdgesWorkType>(std::marker::PhantomData));
+            // use crate::util::reference_processor::MTPrepareRefs;
+            // self.work_buckets[WorkBucketStage::ClosureEnd].add(MTPrepareRefs::<C::ProcessEdgesWorkType>(std::marker::PhantomData));
 
-            if *plan.base().options.multithread_reference_processing {
-                use crate::util::reference_processor::{MTPrepareRetainRefs, MTPrepareScanRefs};
-                self.work_buckets[WorkBucketStage::SoftRefClosure]
-                    .add(MTPrepareRetainRefs::<C::ProcessEdgesWorkType>::new());
-                self.work_buckets[WorkBucketStage::WeakRefClosure]
-                    .add(MTPrepareScanRefs::<C::ProcessEdgesWorkType>::new());
-            } else {
+            {
                 use crate::util::reference_processor::{
                     PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
                 };
@@ -202,6 +202,25 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     .add(WeakRefProcessing::<C::ProcessEdgesWorkType>::new());
                 self.work_buckets[WorkBucketStage::PhantomRefClosure]
                     .add(PhantomRefProcessing::<C::ProcessEdgesWorkType>::new());
+            }
+
+            if *plan.base().options.multithread_reference_processing {
+                // use crate::util::reference_processor::{MTPrepareRetainRefs, MTPrepareScanRefs};
+                // self.work_buckets[WorkBucketStage::SoftRefClosure]
+                //     .add(MTPrepareRetainRefs::<C::ProcessEdgesWorkType>::new());
+                // self.work_buckets[WorkBucketStage::WeakRefClosure]
+                //     .add(MTPrepareScanRefs::<C::ProcessEdgesWorkType>::new());
+            } else {
+                // use crate::util::reference_processor::{
+                //     PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
+                // };
+
+                // self.work_buckets[WorkBucketStage::SoftRefClosure]
+                //     .add(SoftRefProcessing::<C::ProcessEdgesWorkType>::new());
+                // self.work_buckets[WorkBucketStage::WeakRefClosure]
+                //     .add(WeakRefProcessing::<C::ProcessEdgesWorkType>::new());
+                // self.work_buckets[WorkBucketStage::PhantomRefClosure]
+                //     .add(PhantomRefProcessing::<C::ProcessEdgesWorkType>::new());
             }
 
             // VM-specific weak ref processing
@@ -234,6 +253,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     fn are_buckets_drained(&self, buckets: &[WorkBucketStage]) -> bool {
         buckets.iter().all(|&b| self.work_buckets[b].is_drained())
+            && self.pending_messages.load(Ordering::SeqCst) == 0
     }
 
     pub fn on_closure_end(&self, f: Box<dyn Send + Fn() -> bool>) {
@@ -260,9 +280,13 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
             let bucket = &self.work_buckets[id];
             let bucket_opened = bucket.update(self);
-            buckets_updated |= bucket_opened;
+            buckets_updated = buckets_updated || bucket_opened;
             if bucket_opened {
-                new_packets |= !bucket.is_drained();
+                new_packets = new_packets || !bucket.is_drained();
+                // Quit the loop. There'are already new packets in the newly opened buckets.
+                if new_packets {
+                    break;
+                }
             }
         }
         buckets_updated && new_packets
@@ -296,6 +320,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn add_coordinator_work(&self, work: impl CoordinatorWork<VM>, worker: &GCWorker<VM>) {
+        self.pending_messages.fetch_add(1, Ordering::SeqCst);
         worker
             .sender
             .send(CoordinatorMessage::Work(Box::new(work)))
@@ -409,6 +434,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 }
                 debug_assert!(!self.worker_group.has_designated_work());
                 // The current pause is finished if we can't open more buckets.
+                self.pending_messages.fetch_add(1, Ordering::SeqCst);
                 worker.sender.send(CoordinatorMessage::Finish).unwrap();
             }
             trace!("Worker#{} parked", worker.ordinal);
