@@ -5,7 +5,7 @@ use atomic::Ordering;
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::load_metadata;
-use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
+use crate::util::metadata::{fetch_update_metadata, MetadataSpec};
 use crate::util::*;
 use crate::MMTK;
 
@@ -65,30 +65,41 @@ impl<E: ProcessEdgesWork> ObjectRememberingBarrier<E> {
     /// Returns true if the object is not logged previously.
     #[inline(always)]
     fn log_object(&self, object: ObjectReference) -> bool {
-        loop {
-            // Try set the bit from 1 to 0 (log object). This may fail, if
-            // 1. the bit is cleared by others, or
-            // 2. other bits in the same byte may get modified if we use side metadata
-            if compare_exchange_metadata::<E::VM>(
-                &self.meta,
-                object,
-                1,
-                0,
-                None,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                // We just logged the object
-                return true;
+        fetch_update_metadata::<E::VM, _>(
+            &self.meta,
+            object,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+            |old_bit: usize| if old_bit == 0 {
+                None
             } else {
-                let old_value =
-                    load_metadata::<E::VM>(&self.meta, object, None, Some(Ordering::SeqCst));
-                // If the bit is cleared before, someone else has logged the object. Return false.
-                if old_value == 0 {
-                    return false;
-                }
+                Some(1)
             }
-        }
+        ).is_ok()
+        // loop {
+        //     // Try set the bit from 1 to 0 (log object). This may fail, if
+        //     // 1. the bit is cleared by others, or
+        //     // 2. other bits in the same byte may get modified if we use side metadata
+        //     if compare_exchange_metadata::<E::VM>(
+        //         &self.meta,
+        //         object,
+        //         1,
+        //         0,
+        //         None,
+        //         Ordering::SeqCst,
+        //         Ordering::SeqCst,
+        //     ) {
+        //         // We just logged the object
+        //         return true;
+        //     } else {
+        //         let old_value =
+        //             load_metadata::<E::VM>(&self.meta, object, None, Some(Ordering::SeqCst));
+        //         // If the bit is cleared before, someone else has logged the object. Return false.
+        //         if old_value == 0 {
+        //             return false;
+        //         }
+        //     }
+        // }
     }
 
     #[inline(always)]

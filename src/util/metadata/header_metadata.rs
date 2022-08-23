@@ -694,3 +694,195 @@ pub fn fetch_sub_metadata(
         unreachable!()
     }
 }
+
+#[inline(always)]
+pub fn fetch_update_metadata<F: FnMut(usize) -> Option<usize>>(
+    metadata_spec: &HeaderMetadataSpec,
+    object: ObjectReference,
+    set_order: Ordering,
+    fetch_order: Ordering,
+    mut f: F,
+) -> std::result::Result<usize, usize> {
+    if metadata_spec.num_of_bits < 8 {
+        debug_assert!(
+            (metadata_spec.bit_offset >> LOG_BITS_IN_BYTE as isize)
+                == ((metadata_spec.bit_offset + metadata_spec.num_of_bits as isize - 1)
+                    >> LOG_BITS_IN_BYTE),
+            "Metadata << 8-bits: ({:?}) stretches over two bytes!",
+            metadata_spec
+        );
+
+        let byte_offset = metadata_spec.bit_offset >> LOG_BITS_IN_BYTE;
+        let bit_shift = metadata_spec.bit_offset - (byte_offset << LOG_BITS_IN_BYTE);
+        let mask = ((1u8 << metadata_spec.num_of_bits) - 1) << bit_shift;
+
+        let byte_addr = object.to_address() + byte_offset;
+        let mut old_byte = unsafe { byte_addr.atomic_load::<AtomicU8>(fetch_order) };
+        loop {
+            let old_metadata = (old_byte & mask) >> bit_shift;
+            if let Some(new_metadata) = f(old_metadata as usize) {
+                let new_byte = (old_byte & !mask) | ((new_metadata as u8) << bit_shift);
+                match unsafe { byte_addr.compare_exchange::<AtomicU8>(old_byte, new_byte, set_order, fetch_order) } {
+                    x @ Ok(_) => {
+                        return x.map(|x| ((x & mask) as usize) >> bit_shift).map_err(|x| ((x & mask) as usize) >> bit_shift)
+                    }
+                    Err(next) => old_byte = next
+                }
+            } else {
+                return Err((((old_byte & mask) as usize) >> bit_shift) as usize)
+            }
+        }
+    } else if metadata_spec.num_of_bits == 8 {
+        debug_assert!(
+            metadata_spec.bit_offset.trailing_zeros() as usize >= LOG_BITS_IN_BYTE.into(),
+            "Metadata 8-bits: ({:?}) bit_offset must be byte-aligned!",
+            metadata_spec
+        );
+        let byte_offset = metadata_spec.bit_offset >> LOG_BITS_IN_BYTE;
+
+        unsafe {
+            (*(object.to_address() + byte_offset).to_ptr::<AtomicU8>())
+                .fetch_update(set_order, fetch_order, |x| f(x as _).map(|x| x as _))
+                .map(|x| x as usize)
+                .map_err(|x| x as usize)
+        }
+    } else if metadata_spec.num_of_bits == 16 {
+        debug_assert!(
+            metadata_spec.bit_offset.trailing_zeros() as usize >= LOG_BITS_IN_U16,
+            "Metadata 16-bits: ({:?}) bit_offset must be 2-bytes aligned!",
+            metadata_spec
+        );
+        let u16_offset = metadata_spec.bit_offset >> LOG_BITS_IN_BYTE;
+
+        unsafe {
+            (*(object.to_address() + u16_offset).to_ptr::<AtomicU16>())
+                .fetch_update(set_order, fetch_order, |x| f(x as _).map(|x| x as _))
+                .map(|x| x as usize)
+                .map_err(|x| x as usize)
+        }
+    } else if metadata_spec.num_of_bits == 32 {
+        debug_assert!(
+            metadata_spec.bit_offset.trailing_zeros() as usize >= LOG_BITS_IN_U32,
+            "Metadata 32-bits: ({:?}) bit_offset must be 4-bytes aligned!",
+            metadata_spec
+        );
+        let u32_offset = metadata_spec.bit_offset >> LOG_BITS_IN_BYTE;
+
+        unsafe {
+            (*(object.to_address() + u32_offset).to_ptr::<AtomicU32>())
+                .fetch_update(set_order, fetch_order, |x| f(x as _).map(|x| x as _))
+                .map(|x| x as usize)
+                .map_err(|x| x as usize)
+        }
+    } else if metadata_spec.num_of_bits == 64 {
+        debug_assert!(
+            metadata_spec.bit_offset.trailing_zeros() as usize >= LOG_BITS_IN_WORD,
+            "Metadata 32-bits: ({:?}) bit_offset must be 4-bytes aligned!",
+            metadata_spec
+        );
+        let meta_offset = metadata_spec.bit_offset >> LOG_BITS_IN_BYTE;
+
+        unsafe {
+            (*(object.to_address() + meta_offset).to_ptr::<AtomicUsize>())
+                .fetch_update(set_order, fetch_order, |x| f(x as _).map(|x| x as _))
+                .map(|x| x as usize)
+                .map_err(|x| x as usize)
+        }
+    } else {
+        unreachable!()
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::address::Address;
+
+    fn create_dummy_object() -> (ObjectReference, *mut usize) {
+        let ptr = Box::into_raw(Box::new(0usize));
+        (unsafe { Address::from_ptr(ptr).to_object_reference() }, ptr)
+    }
+    fn free_dummy_object(obj: ObjectReference) {
+        let ptr: *mut usize = obj.to_address().to_mut_ptr();
+        unsafe { Box::from_raw(ptr); }
+    }
+
+    fn with_obj<F>(f: F) where F: FnOnce(ObjectReference, *mut usize) + std::panic::UnwindSafe {
+        let (obj, ptr) = create_dummy_object();
+        crate::util::test_util::with_cleanup(|| {
+            f(obj, ptr)
+        }, || {
+            free_dummy_object(obj)
+        })
+    }
+
+    #[test]
+    fn test_load_store_1bit() {
+        with_obj(|obj, ptr| {
+            let spec = HeaderMetadataSpec{ bit_offset: 0, num_of_bits: 1 };
+            assert_eq!(load_metadata(&spec, obj, None, None), 0);
+
+            unsafe { *ptr = 0b1111usize };
+            assert_eq!(load_metadata(&spec, obj, None, None), 1);
+
+            store_metadata(&spec, obj, 0, None, None);
+            assert_eq!(load_metadata(&spec, obj, None, None), 0);
+            assert_eq!(unsafe { *ptr }, 0b1110);
+        });
+        with_obj(|obj, ptr| {
+            let spec = HeaderMetadataSpec{ bit_offset: 1, num_of_bits: 1 };
+            assert_eq!(load_metadata(&spec, obj, None, None), 0);
+
+            unsafe { *ptr = 0b1111usize };
+            assert_eq!(load_metadata(&spec, obj, None, None), 1);
+
+            store_metadata(&spec, obj, 0, None, None);
+            assert_eq!(load_metadata(&spec, obj, None, None), 0);
+            assert_eq!(unsafe { *ptr }, 0b1101);
+        });
+    }
+
+    #[test]
+    fn test_load_store_1byte() {
+        with_obj(|obj, ptr| {
+            let spec = HeaderMetadataSpec{ bit_offset: 0, num_of_bits: 8 };
+            assert_eq!(load_metadata(&spec, obj, None, None), 0);
+
+            unsafe { *ptr = 0xffffusize };
+            assert_eq!(load_metadata(&spec, obj, None, None), 0xffusize);
+
+            store_metadata(&spec, obj, 0, None, None);
+            assert_eq!(load_metadata(&spec, obj, None, None), 0);
+            assert_eq!(unsafe { *ptr }, 0xff00usize);
+        });
+        with_obj(|obj, ptr| {
+            let spec = HeaderMetadataSpec{ bit_offset: 8, num_of_bits: 8 };
+            assert_eq!(load_metadata(&spec, obj, None, None), 0);
+
+            unsafe { *ptr = 0xffffusize };
+            assert_eq!(load_metadata(&spec, obj, None, None), 0xffusize);
+
+            store_metadata(&spec, obj, 0, None, None);
+            assert_eq!(load_metadata(&spec, obj, None, None), 0);
+            assert_eq!(unsafe { *ptr }, 0x00ffusize);
+        });
+    }
+
+    #[test]
+    fn test_fetch_add_1byte() {
+        with_obj(|obj, ptr| {
+            let spec = HeaderMetadataSpec{ bit_offset: 0, num_of_bits: 8 };
+
+            let prev = fetch_add_metadata(&spec, obj, 1, Ordering::SeqCst);
+            assert_eq!(prev, 0);
+            assert_eq!(load_metadata(&spec, obj, None, None), 1);
+            assert_eq!(unsafe { *ptr }, 0x01usize);
+
+            let prev = fetch_add_metadata(&spec, obj, 3, Ordering::SeqCst);
+            assert_eq!(prev, 1);
+            assert_eq!(load_metadata(&spec, obj, None, None), 4);
+            assert_eq!(unsafe { *ptr }, 0x04usize);
+        })
+    }
+}
