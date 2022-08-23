@@ -200,6 +200,37 @@ pub fn fetch_sub_metadata<VM: VMBinding>(
     }
 }
 
+/// A function to atomically update on the specified metadata's content. It fetches the value of
+/// the metadata, and applies a function to it that returns an optional new value. Returns a
+/// `Result` of `Ok(previous_value)` if the given function returned `Some(_)`, else returns
+/// `Err(previous_value)`.
+///
+/// # Arguments:
+/// * `metadata_spec`: is one of the const `MetadataSpec` instances from the ObjectModel trait, for the target metadata. Whether the metadata is in-header or on-side is a VM-specific choice.
+/// * `object`: is a reference to the target object.
+/// * `set_order`: the required ordering for when the operation finally succeeds.
+/// * `fetch_order`: the required ordering for loads.
+/// * `f`: the function to apply. The function may be called multiple times if the value has been changed
+///        from other threads in the meantime, as long as the function returns Some(_), but the function
+///        will have been applied only once to the stored value.
+#[inline(always)]
+pub fn fetch_update_metadata<VM: VMBinding, F: FnMut(usize) -> Option<usize>>(
+    metadata_spec: &MetadataSpec,
+    object: ObjectReference,
+    set_order: Ordering,
+    fetch_order: Ordering,
+    f: F,
+) -> std::result::Result<usize, usize> {
+    match metadata_spec {
+        MetadataSpec::OnSide(metadata_spec) => {
+            side_metadata::fetch_update_atomic(metadata_spec, object.to_address(), set_order, fetch_order, f)
+        }
+        MetadataSpec::InHeader(metadata_spec) => {
+            VM::VMObjectModel::fetch_update_metadata(metadata_spec, object, set_order, fetch_order, f)
+        }
+    }
+}
+
 /// Given a slice of metadata specifications, returns a vector of the specs which are on side.
 ///
 /// # Arguments:

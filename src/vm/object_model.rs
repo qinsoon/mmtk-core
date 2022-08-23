@@ -180,6 +180,27 @@ pub trait ObjectModel<VM: VMBinding> {
         order: Ordering,
     ) -> usize;
 
+    /// A function to atomically update on the specified metadata's content. It fetches the value of
+    /// the metadata, and applies a function to it that returns an optional new value. Returns a
+    /// `Result` of `Ok(previous_value)` if the given function returned `Some(_)`, else returns
+    /// `Err(previous_value)`.
+    ///
+    /// # Arguments:
+    /// * `metadata_spec`: is one of the const `MetadataSpec` instances from the ObjectModel trait, for the target metadata. Whether the metadata is in-header or on-side is a VM-specific choice.
+    /// * `object`: is a reference to the target object.
+    /// * `set_order`: the required ordering for when the operation finally succeeds.
+    /// * `fetch_order`: the required ordering for loads.
+    /// * `f`: the function to apply. The function may be called multiple times if the value has been changed
+    ///        from other threads in the meantime, as long as the function returns Some(_), but the function
+    ///        will have been applied only once to the stored value.
+    fn fetch_update_metadata<F: FnMut(usize) -> Option<usize>>(
+        metadata_spec: &HeaderMetadataSpec,
+        object: ObjectReference,
+        set_order: Ordering,
+        fetch_order: Ordering,
+        f: F
+    ) -> std::result::Result<usize, usize>;
+
     /// Copy an object and return the address of the new object. Usually in the implementation of this method,
     /// `alloc_copy()` and `post_copy()` from [`GCWorkerCopyContext`](util/copy/struct.GCWorkerCopyContext.html)
     /// are used for copying.
