@@ -786,7 +786,7 @@ pub fn fetch_update_metadata<F: FnMut(usize) -> Option<usize>>(
         }
     } else if metadata_spec.num_of_bits == 64 {
         debug_assert!(
-            metadata_spec.bit_offset.trailing_zeros() as usize >= LOG_BITS_IN_WORD,
+            metadata_spec.bit_offset.trailing_zeros() as usize >= LOG_BITS_IN_U64,
             "Metadata 32-bits: ({:?}) bit_offset must be 4-bytes aligned!",
             metadata_spec
         );
@@ -829,6 +829,7 @@ mod tests {
 
     #[test]
     fn test_load_store_1bit() {
+        // test load/store
         with_obj(|obj, ptr| {
             let spec = HeaderMetadataSpec{ bit_offset: 0, num_of_bits: 1 };
             assert_eq!(load_metadata(&spec, obj, None, None), 0);
@@ -840,6 +841,7 @@ mod tests {
             assert_eq!(load_metadata(&spec, obj, None, None), 0);
             assert_eq!(unsafe { *ptr }, 0b1110);
         });
+        // test load/store with the bit at offset1
         with_obj(|obj, ptr| {
             let spec = HeaderMetadataSpec{ bit_offset: 1, num_of_bits: 1 };
             assert_eq!(load_metadata(&spec, obj, None, None), 0);
@@ -855,6 +857,7 @@ mod tests {
 
     #[test]
     fn test_load_store_1byte() {
+        // test load/store
         with_obj(|obj, ptr| {
             let spec = HeaderMetadataSpec{ bit_offset: 0, num_of_bits: 8 };
             assert_eq!(load_metadata(&spec, obj, None, None), 0);
@@ -866,6 +869,7 @@ mod tests {
             assert_eq!(load_metadata(&spec, obj, None, None), 0);
             assert_eq!(unsafe { *ptr }, 0xff00usize);
         });
+        // test load/store with the byte at 1 byte offset
         with_obj(|obj, ptr| {
             let spec = HeaderMetadataSpec{ bit_offset: 8, num_of_bits: 8 };
             assert_eq!(load_metadata(&spec, obj, None, None), 0);
@@ -893,6 +897,65 @@ mod tests {
             assert_eq!(prev, 1);
             assert_eq!(load_metadata(&spec, obj, None, None), 4);
             assert_eq!(unsafe { *ptr }, 0x04usize);
+        })
+    }
+
+    #[test]
+    fn test_fetch_update_1bit() {
+        // test fetch update
+        with_obj(|obj, _ptr| {
+            let spec = HeaderMetadataSpec{ bit_offset: 0, num_of_bits: 1 };
+
+            let cur = load_metadata(&spec, obj, None, None);
+            assert_eq!(cur, 0);
+
+            let res = fetch_update_metadata(&spec, obj, Ordering::SeqCst, Ordering::SeqCst, |x: usize| if x == 0 { Some(1) } else { None });
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), 0usize);
+
+            let updated = load_metadata(&spec, obj, None, None);
+            assert_eq!(updated, 1);
+        });
+        // test fetch update with an offset
+        with_obj(|obj, ptr| {
+            let spec = HeaderMetadataSpec{ bit_offset: 1, num_of_bits: 1 };
+
+            unsafe { *ptr = 0b1111usize };
+            let cur = load_metadata(&spec, obj, None, None);
+            assert_eq!(cur, 1);
+
+            let res = fetch_update_metadata(&spec, obj, Ordering::SeqCst, Ordering::SeqCst, |x: usize| if x == 1 { Some(0) } else { None });
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), 1usize);
+
+            let updated = load_metadata(&spec, obj, None, None);
+            assert_eq!(updated, 0);
+            assert_eq!(unsafe { *ptr }, 0b1101);
+        });
+    }
+
+    #[test]
+    fn test_fetch_update_1byte() {
+        // test fetch update with an offset
+        with_obj(|obj, ptr| {
+            let spec = HeaderMetadataSpec { bit_offset: 8, num_of_bits: 8 };
+            unsafe { *ptr = 0xffffusize };
+
+            let cur = load_metadata(&spec, obj, None, None);
+            assert_eq!(cur, 0xffusize);
+
+            let res = fetch_update_metadata(&spec, obj, Ordering::SeqCst, Ordering::SeqCst, |x: usize| if x == 0xff { Some(0xf0) } else { None });
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), 0xff);
+            assert_eq!(unsafe { *ptr }, 0xf0ff);
+        });
+        // test fetch update with a failure case
+        with_obj(|obj, ptr| {
+            let spec = HeaderMetadataSpec { bit_offset: 0, num_of_bits: 8 };
+            unsafe { *ptr = 0xff };
+            let res = fetch_update_metadata(&spec, obj, Ordering::SeqCst, Ordering::SeqCst, |_| None); // always fail
+            assert!(res.is_err());
+            assert_eq!(res.err().unwrap(), 0xff);
         })
     }
 }
