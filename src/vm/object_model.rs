@@ -198,7 +198,7 @@ pub trait ObjectModel<VM: VMBinding> {
         object: ObjectReference,
         set_order: Ordering,
         fetch_order: Ordering,
-        f: F
+        f: F,
     ) -> std::result::Result<usize, usize>;
 
     /// Copy an object and return the address of the new object. Usually in the implementation of this method,

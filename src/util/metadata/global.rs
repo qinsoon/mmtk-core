@@ -222,12 +222,20 @@ pub fn fetch_update_metadata<VM: VMBinding, F: FnMut(usize) -> Option<usize>>(
     f: F,
 ) -> std::result::Result<usize, usize> {
     match metadata_spec {
-        MetadataSpec::OnSide(metadata_spec) => {
-            side_metadata::fetch_update_atomic(metadata_spec, object.to_address(), set_order, fetch_order, f)
-        }
-        MetadataSpec::InHeader(metadata_spec) => {
-            VM::VMObjectModel::fetch_update_metadata(metadata_spec, object, set_order, fetch_order, f)
-        }
+        MetadataSpec::OnSide(metadata_spec) => side_metadata::fetch_update_atomic(
+            metadata_spec,
+            object.to_address(),
+            set_order,
+            fetch_order,
+            f,
+        ),
+        MetadataSpec::InHeader(metadata_spec) => VM::VMObjectModel::fetch_update_metadata(
+            metadata_spec,
+            object,
+            set_order,
+            fetch_order,
+            f,
+        ),
     }
 }
 

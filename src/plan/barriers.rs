@@ -70,12 +70,9 @@ impl<E: ProcessEdgesWork> ObjectRememberingBarrier<E> {
             object,
             Ordering::SeqCst,
             Ordering::SeqCst,
-            |old_bit: usize| if old_bit == 0 {
-                None
-            } else {
-                Some(1)
-            }
-        ).is_ok()
+            |old_bit: usize| if old_bit == 0 { None } else { Some(1) },
+        )
+        .is_ok()
         // loop {
         //     // Try set the bit from 1 to 0 (log object). This may fail, if
         //     // 1. the bit is cleared by others, or

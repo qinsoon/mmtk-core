@@ -71,6 +71,16 @@ impl ObjectModel<DummyVM> for VMObjectModel {
         unimplemented!()
     }
 
+    fn fetch_update_metadata<F: FnMut(usize) -> Option<usize>>(
+        _metadata_spec: &HeaderMetadataSpec,
+        _object: ObjectReference,
+        _set_order: Ordering,
+        _fetch_order: Ordering,
+        _f: F
+    ) -> std::result::Result<usize, usize> {
+        unimplemented!()
+    }
+
     fn copy(
         _from: ObjectReference,
         _semantics: CopySemantics,
