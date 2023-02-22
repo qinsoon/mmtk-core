@@ -234,7 +234,7 @@ impl MemBalancerStats {
             self.gc_release_live_pages = plan.get_mature_reserved_pages();
 
             // Calculate the promoted pages (including pre tentured objects)
-            let promoted = self.gc_release_live_pages - self.gc_end_live_pages;
+            let promoted = self.gc_release_live_pages.checked_sub(self.gc_end_live_pages).unwrap();
             self.allocation_pages = promoted as f64;
             trace!(
                 "promoted = mature live before release {} - mature live at prev gc end {} = {}",
@@ -255,7 +255,7 @@ impl MemBalancerStats {
     ) -> bool {
         if !plan.common_gen().is_current_gc_nursery() {
             self.gc_end_live_pages = plan.get_mature_reserved_pages();
-            self.collection_pages = (self.gc_release_live_pages - self.gc_end_live_pages) as f64;
+            self.collection_pages = self.gc_release_live_pages.checked_sub(self.gc_end_live_pages).unwrap() as f64;
             trace!(
                 "collected pages = mature live at gc end {} - mature live at gc release {} = {}",
                 self.gc_release_live_pages,
@@ -273,7 +273,7 @@ impl MemBalancerStats {
     // * collection = live pages at the end of GC - live pages before release
 
     fn non_generational_mem_stats_on_gc_start<VM: VMBinding>(&mut self, mmtk: &'static MMTK<VM>) {
-        self.allocation_pages = (mmtk.plan.get_reserved_pages() - self.gc_end_live_pages) as f64;
+        self.allocation_pages = mmtk.plan.get_reserved_pages().checked_sub(self.gc_end_live_pages).unwrap() as f64;
         trace!(
             "allocated pages = used {} - live in last gc {} = {}",
             mmtk.plan.get_reserved_pages(),
@@ -288,7 +288,7 @@ impl MemBalancerStats {
     fn non_generational_mem_stats_on_gc_end<VM: VMBinding>(&mut self, mmtk: &'static MMTK<VM>) {
         self.gc_end_live_pages = mmtk.plan.get_reserved_pages();
         trace!("live pages = {}", self.gc_end_live_pages);
-        self.collection_pages = (self.gc_release_live_pages - self.gc_end_live_pages) as f64;
+        self.collection_pages = self.gc_release_live_pages.checked_sub(self.gc_end_live_pages).unwrap() as f64;
         trace!(
             "collected pages = live at gc end {} - live at gc release {} = {}",
             self.gc_release_live_pages,
@@ -471,7 +471,7 @@ impl MemBalancerTrigger {
         stats.collection_time = 0f64;
 
         // Calculate the square root
-        let e: f64 = if gc_mem != 0f64 {
+        let e: f64 = if alloc_mem != 0f64 && gc_mem != 0f64 && alloc_time != 0f64 && gc_time != 0f64 {
             let mut e = live as f64;
             e *= alloc_mem / alloc_time;
             e /= TUNING_FACTOR;
