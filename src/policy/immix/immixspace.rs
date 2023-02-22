@@ -397,7 +397,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.reusable_blocks.reset();
         }
         // Sweep chunks and blocks
-        let work_packets = self.generate_sweep_tasks();
+        let work_packets = self.generate_sweep_tasks(major_gc);
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
         if super::DEFRAG {
             self.defrag.release(self);
@@ -409,7 +409,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Generate chunk sweep tasks
-    fn generate_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
+    fn generate_sweep_tasks(&self, major_gc: bool) -> Vec<Box<dyn GCWork<VM>>> {
         self.defrag.mark_histograms.lock().clear();
         // # Safety: ImmixSpace reference is always valid within this collection cycle.
         let space = unsafe { &*(self as *const Self) };
@@ -422,6 +422,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 space,
                 chunk,
                 epilogue: epilogue.clone(),
+                major_gc
             })
         });
         epilogue.counter.store(tasks.len(), Ordering::SeqCst);
@@ -741,17 +742,17 @@ impl<VM: VMBinding> PrepareBlockState<VM> {
         if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
             side.bzero_metadata(self.chunk.start(), Chunk::BYTES);
         }
-        if self.space.space_args.reset_log_bit_in_major_gc {
-            if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC {
-                // We zero all the log bits in major GC, and for every object we trace, we will mark the log bit again.
-                side.bzero_metadata(self.chunk.start(), Chunk::BYTES);
-            } else {
-                // If the log bit is not in side metadata, we cannot bulk zero. We can either
-                // clear the bit for dead objects in major GC, or clear the log bit for new
-                // objects. In either cases, we do not need to set log bit at tracing.
-                unimplemented!("We cannot bulk zero unlogged bit.")
-            }
-        }
+        // if self.space.space_args.reset_log_bit_in_major_gc {
+        //     if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC {
+        //         // We zero all the log bits in major GC, and for every object we trace, we will mark the log bit again.
+        //         side.bzero_metadata(self.chunk.start(), Chunk::BYTES);
+        //     } else {
+        //         // If the log bit is not in side metadata, we cannot bulk zero. We can either
+        //         // clear the bit for dead objects in major GC, or clear the log bit for new
+        //         // objects. In either cases, we do not need to set log bit at tracing.
+        //         unimplemented!("We cannot bulk zero unlogged bit.")
+        //     }
+        // }
         if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC {
             side.bzero_metadata(self.chunk.start(), Chunk::BYTES);
         }
@@ -789,6 +790,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
 
 /// Chunk sweeping work packet.
 struct SweepChunk<VM: VMBinding> {
+    major_gc: bool,
     space: &'static ImmixSpace<VM>,
     chunk: Chunk,
     /// A destructor invoked when all `SweepChunk` packets are finished.
@@ -812,7 +814,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
                 .iter_region::<Block>()
                 .filter(|block| block.get_state() != BlockState::Unallocated)
             {
-                if !block.sweep(self.space, &mut histogram, line_mark_state) {
+                if !block.sweep(self.space, &mut histogram, line_mark_state, self.major_gc) {
                     // Block is live. Increment the allocated block count.
                     allocated_blocks += 1;
                 }

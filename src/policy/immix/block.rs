@@ -193,6 +193,7 @@ impl Block {
         space: &ImmixSpace<VM>,
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
+        zero_log_bit: bool,
     ) -> bool {
         if super::BLOCK_ONLY {
             match self.get_state() {
@@ -212,16 +213,38 @@ impl Block {
             // Calculate number of marked lines and holes.
             let mut marked_lines = 0;
             let mut holes = 0;
+            let mut hole_start: Option<Line> = None;
             let mut prev_line_is_marked = true;
             let line_mark_state = line_mark_state.unwrap();
+
+            let sweep_contiguous_lines = |start: Address, size: usize| {
+                if zero_log_bit {
+                    match VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.as_spec() {
+                        crate::util::metadata::MetadataSpec::OnSide(spec) => spec.bzero_metadata(start, size),
+                        _ => unimplemented!()
+                    }
+                }
+            };
 
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {
                     marked_lines += 1;
+
+                    if !prev_line_is_marked {
+                        // Hole end
+                        if let Some(hole_start_line) = hole_start {
+                            sweep_contiguous_lines(hole_start_line.start(), line.start() - hole_start_line.start());
+                        }
+                        hole_start = None;
+                    }
+
                     prev_line_is_marked = true;
                 } else {
                     if prev_line_is_marked {
+                        // Hole starts
                         holes += 1;
+                        debug_assert!(hole_start.is_none());
+                        hole_start = Some(line);
                     }
 
                     #[cfg(feature = "global_alloc_bit")]
@@ -232,6 +255,10 @@ impl Block {
 
                     prev_line_is_marked = false;
                 }
+            }
+
+            if let Some(hole_start_line) = hole_start {
+                sweep_contiguous_lines(hole_start_line.start(), self.end() - hole_start_line.start());
             }
 
             if marked_lines == 0 {
