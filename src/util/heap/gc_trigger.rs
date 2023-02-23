@@ -481,12 +481,13 @@ impl MemBalancerTrigger {
             // If collected memory is zero, we cannot do division by zero. So use an estimate value instead.
             (live as f64 * 4096f64).sqrt()
         };
+        let e2 = (live as f64 * 4096f64).sqrt();
 
         // Get pending allocations
         let pending_pages = self.pending_pages.load(Ordering::SeqCst);
 
         // This is the optimal heap limit due to mem balancer. We will need to clamp the value to the defined min/max range.
-        let optimal_heap = live + e as usize + extra_reserve + pending_pages;
+        let optimal_heap = live + e2 as usize + extra_reserve + pending_pages;
         trace!(
             "optimal = live {} + sqrt(live) {} + extra {}",
             live,
