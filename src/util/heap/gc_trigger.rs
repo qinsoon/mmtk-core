@@ -3,7 +3,7 @@ use atomic::Ordering;
 use crate::plan::Plan;
 use crate::policy::space::Space;
 use crate::util::conversions;
-use crate::util::options::{GCTriggerSelector, Options};
+use crate::util::options::{GCTriggerSelector, HeapResizingHeuristics, Options};
 use crate::vm::VMBinding;
 use crate::MMTK;
 use std::mem::MaybeUninit;
@@ -29,10 +29,18 @@ impl<VM: VMBinding> GCTrigger<VM> {
                 GCTriggerSelector::FixedHeapSize(size) => Box::new(FixedHeapSizeTrigger {
                     total_pages: conversions::bytes_to_pages_up(size),
                 }),
-                GCTriggerSelector::DynamicHeapSize(min, max) => Box::new(MemBalancerTrigger::new(
-                    conversions::bytes_to_pages_up(min),
-                    conversions::bytes_to_pages_up(max),
-                )),
+                GCTriggerSelector::DynamicHeapSize(min, max) => {
+                    let min_pages = conversions::bytes_to_pages_up(min);
+                    let max_pages = conversions::bytes_to_pages_up(max);
+                    match *options.heap_resizing {
+                        HeapResizingHeuristics::MemBalancer => {
+                            Box::new(MemBalancerTrigger::new(min_pages, max_pages))
+                        }
+                        HeapResizingHeuristics::SimpleLiveSqrt => {
+                            Box::new(SimpleLiveSqrtTrigger::new(min_pages, max_pages))
+                        }
+                    }
+                }
                 GCTriggerSelector::Delegated => unimplemented!(),
             },
         }
@@ -99,9 +107,15 @@ pub trait GCTriggerPolicy<VM: VMBinding>: Sync + Send {
         space_full: bool,
         space: Option<&dyn Space<VM>>,
         plan: &dyn Plan<VM = VM>,
-    ) -> bool;
+    ) -> bool {
+        // Let the plan decide
+        plan.collection_required(space_full, space)
+    }
     /// Is current heap full?
-    fn is_heap_full(&self, plan: &'static dyn Plan<VM = VM>) -> bool;
+    fn is_heap_full(&self, plan: &'static dyn Plan<VM = VM>) -> bool {
+        // If reserved pages is larger than the total pages, the heap is full.
+        plan.get_reserved_pages() > self.get_heap_size_in_pages()
+    }
     /// Return the current heap size (in pages)
     fn get_heap_size_in_pages(&self) -> usize;
     /// Can the heap size grow?
@@ -113,27 +127,62 @@ pub struct FixedHeapSizeTrigger {
     total_pages: usize,
 }
 impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
-    fn is_gc_required(
-        &self,
-        space_full: bool,
-        space: Option<&dyn Space<VM>>,
-        plan: &dyn Plan<VM = VM>,
-    ) -> bool {
-        // Let the plan decide
-        plan.collection_required(space_full, space)
-    }
-
-    fn is_heap_full(&self, plan: &'static dyn Plan<VM = VM>) -> bool {
-        // If reserved pages is larger than the total pages, the heap is full.
-        plan.get_reserved_pages() > self.total_pages
-    }
-
     fn get_heap_size_in_pages(&self) -> usize {
         self.total_pages
     }
 
     fn can_heap_size_grow(&self) -> bool {
         false
+    }
+}
+
+/// Common states about heap resizing triggers.
+pub struct HeapResizingState {
+    /// The min heap size
+    min_heap_pages: usize,
+    /// The max heap size
+    max_heap_pages: usize,
+    /// The current heap size
+    current_heap_pages: AtomicUsize,
+    /// The number of pending allocation pages. The allocation requests for them have failed, and a GC is triggered.
+    /// We will need to take them into consideration so that the new heap size can accomodate those allocations.
+    pending_pages: AtomicUsize,
+}
+
+impl HeapResizingState {
+    fn new(min_heap_pages: usize, max_heap_pages: usize) -> Self {
+        Self {
+            min_heap_pages,
+            max_heap_pages,
+            current_heap_pages: AtomicUsize::new(min_heap_pages),
+            pending_pages: AtomicUsize::new(0),
+        }
+    }
+
+    fn set_new_heap_size(&self, pages: usize) -> usize {
+        let new_heap = pages.clamp(self.min_heap_pages, self.max_heap_pages);
+        self.current_heap_pages.store(new_heap, Ordering::SeqCst);
+        new_heap
+    }
+
+    fn get_cur_heap_size(&self) -> usize {
+        self.current_heap_pages.load(Ordering::SeqCst)
+    }
+
+    fn set_pending_pages(&self, pages: usize) {
+        self.pending_pages.store(pages, Ordering::SeqCst);
+    }
+
+    fn clear_pending_pages(&self) {
+        self.set_pending_pages(0);
+    }
+
+    fn get_pending_pages(&self) -> usize {
+        self.pending_pages.load(Ordering::SeqCst)
+    }
+
+    fn is_max_heap_size_now(&self) -> bool {
+        self.current_heap_pages.load(Ordering::SeqCst) >= self.max_heap_pages
     }
 }
 
@@ -144,17 +193,8 @@ use std::time::Instant;
 /// We use MemBalancer to decide a heap limit between the min heap and the max heap.
 /// The current implementation is a simplified version of mem balancer and it does not take collection/allocation speed into account,
 /// and uses a fixed constant instead.
-// TODO: implement a complete mem balancer.
 pub struct MemBalancerTrigger {
-    /// The min heap size
-    min_heap_pages: usize,
-    /// The max heap size
-    max_heap_pages: usize,
-    /// The current heap size
-    current_heap_pages: AtomicUsize,
-    /// The number of pending allocation pages. The allocation requests for them have failed, and a GC is triggered.
-    /// We will need to take them into consideration so that the new heap size can accomodate those allocations.
-    pending_pages: AtomicUsize,
+    state: HeapResizingState,
     /// Statistics
     stats: AtomicRefCell<MemBalancerStats>,
 }
@@ -234,7 +274,9 @@ impl MemBalancerStats {
             self.gc_release_live_pages = plan.get_mature_reserved_pages();
 
             // Calculate the promoted pages (including pre tentured objects)
-            let promoted = self.gc_release_live_pages.saturating_sub(self.gc_end_live_pages);
+            let promoted = self
+                .gc_release_live_pages
+                .saturating_sub(self.gc_end_live_pages);
             self.allocation_pages = promoted as f64;
             trace!(
                 "promoted = mature live before release {} - mature live at prev gc end {} = {}",
@@ -255,7 +297,9 @@ impl MemBalancerStats {
     ) -> bool {
         if !plan.common_gen().is_current_gc_nursery() {
             self.gc_end_live_pages = plan.get_mature_reserved_pages();
-            self.collection_pages = self.gc_release_live_pages.saturating_sub(self.gc_end_live_pages) as f64;
+            self.collection_pages = self
+                .gc_release_live_pages
+                .saturating_sub(self.gc_end_live_pages) as f64;
             trace!(
                 "collected pages = mature live at gc end {} - mature live at gc release {} = {}",
                 self.gc_release_live_pages,
@@ -273,7 +317,10 @@ impl MemBalancerStats {
     // * collection = live pages at the end of GC - live pages before release
 
     fn non_generational_mem_stats_on_gc_start<VM: VMBinding>(&mut self, mmtk: &'static MMTK<VM>) {
-        self.allocation_pages = mmtk.plan.get_reserved_pages().saturating_sub(self.gc_end_live_pages) as f64;
+        self.allocation_pages = mmtk
+            .plan
+            .get_reserved_pages()
+            .saturating_sub(self.gc_end_live_pages) as f64;
         trace!(
             "allocated pages = used {} - live in last gc {} = {}",
             mmtk.plan.get_reserved_pages(),
@@ -288,7 +335,9 @@ impl MemBalancerStats {
     fn non_generational_mem_stats_on_gc_end<VM: VMBinding>(&mut self, mmtk: &'static MMTK<VM>) {
         self.gc_end_live_pages = mmtk.plan.get_reserved_pages();
         trace!("live pages = {}", self.gc_end_live_pages);
-        self.collection_pages = self.gc_release_live_pages.saturating_sub(self.gc_end_live_pages) as f64;
+        self.collection_pages = self
+            .gc_release_live_pages
+            .saturating_sub(self.gc_end_live_pages) as f64;
         trace!(
             "collected pages = live at gc end {} - live at gc release {} = {}",
             self.gc_release_live_pages,
@@ -300,7 +349,7 @@ impl MemBalancerStats {
 
 impl<VM: VMBinding> GCTriggerPolicy<VM> for MemBalancerTrigger {
     fn on_pending_allocation(&self, pages: usize) {
-        self.pending_pages.fetch_add(pages, Ordering::SeqCst);
+        self.state.set_pending_pages(pages);
     }
 
     fn on_gc_start(&self, mmtk: &'static MMTK<VM>) {
@@ -365,40 +414,21 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for MemBalancerTrigger {
             }
         });
         // Clear pending allocation pages at the end of GC, no matter we used it or not.
-        self.pending_pages.store(0, Ordering::SeqCst);
-    }
-
-    fn is_gc_required(
-        &self,
-        space_full: bool,
-        space: Option<&dyn Space<VM>>,
-        plan: &dyn Plan<VM = VM>,
-    ) -> bool {
-        // Let the plan decide
-        plan.collection_required(space_full, space)
-    }
-
-    fn is_heap_full(&self, plan: &'static dyn Plan<VM = VM>) -> bool {
-        // If reserved pages is larger than the current heap size, the heap is full.
-        plan.get_reserved_pages() > self.current_heap_pages.load(Ordering::Relaxed)
+        self.state.clear_pending_pages();
     }
 
     fn get_heap_size_in_pages(&self) -> usize {
-        self.current_heap_pages.load(Ordering::Relaxed)
+        self.state.get_cur_heap_size()
     }
 
     fn can_heap_size_grow(&self) -> bool {
-        self.current_heap_pages.load(Ordering::Relaxed) < self.max_heap_pages
+        !self.state.is_max_heap_size_now()
     }
 }
 impl MemBalancerTrigger {
     fn new(min_heap_pages: usize, max_heap_pages: usize) -> Self {
         Self {
-            min_heap_pages,
-            max_heap_pages,
-            pending_pages: AtomicUsize::new(0),
-            // start with min heap
-            current_heap_pages: AtomicUsize::new(min_heap_pages),
+            state: HeapResizingState::new(min_heap_pages, max_heap_pages),
             stats: AtomicRefCell::new(Default::default()),
         }
     }
@@ -470,42 +500,72 @@ impl MemBalancerTrigger {
         stats.collection_time_prev = Some(stats.collection_time);
         stats.collection_time = 0f64;
 
-        // Calculate the square root
-        let e: f64 = if alloc_mem != 0f64 && gc_mem != 0f64 && alloc_time != 0f64 && gc_time != 0f64 {
-            let mut e = live as f64;
-            e *= alloc_mem / alloc_time;
-            e /= TUNING_FACTOR;
-            e /= gc_mem / gc_time;
-            e.sqrt()
-        } else {
-            // If collected memory is zero, we cannot do division by zero. So use an estimate value instead.
-            (live as f64 * 4096f64).sqrt()
-        };
-        let e2 = (live as f64 * 4096f64).sqrt();
-
         // Get pending allocations
-        let pending_pages = self.pending_pages.load(Ordering::SeqCst);
+        let pending_pages = self.state.get_pending_pages();
 
         // This is the optimal heap limit due to mem balancer. We will need to clamp the value to the defined min/max range.
-        let optimal_heap = live + e as usize + extra_reserve + pending_pages;
-        trace!(
-            "optimal = live {} + sqrt(live) {} + extra {}",
-            live,
-            e,
-            extra_reserve
-        );
+        let optimal_heap =
+            if alloc_mem != 0f64 && gc_mem != 0f64 && alloc_time != 0f64 && gc_time != 0f64 {
+                let mut e = live as f64;
+                e *= alloc_mem / alloc_time;
+                e /= TUNING_FACTOR;
+                e /= gc_mem / gc_time;
+                trace!(
+                    "optimal = live {} + sqrt(live) {} + extra {}",
+                    live,
+                    e,
+                    extra_reserve + pending_pages,
+                );
+                live + e.sqrt() as usize + extra_reserve + pending_pages
+            } else {
+                // If collected memory is zero, we cannot do division by zero. So use an estimate value instead.
+                SimpleLiveSqrtTrigger::compute_new_heap(live, extra_reserve + pending_pages)
+            };
 
         // The new heap size must be within min/max.
-        let new_heap = optimal_heap.clamp(self.min_heap_pages, self.max_heap_pages);
+        let new_heap = self.state.set_new_heap_size(optimal_heap);
         debug!(
             "MemBalander: new heap limit = {} pages (optimal = {}, clamped to [{}, {}])",
-            new_heap, optimal_heap, self.min_heap_pages, self.max_heap_pages
+            new_heap, optimal_heap, self.state.min_heap_pages, self.state.max_heap_pages
         );
+    }
+}
 
-        let optimal_heap2 = live + e2 as usize + extra_reserve + pending_pages;
-        let new_heap2 = optimal_heap2.clamp(self.min_heap_pages, self.max_heap_pages);
-        eprintln!("Heap resize: membalancer = {}, simple = {} (live={}, min/max={}/{})", optimal_heap, optimal_heap2, live, self.min_heap_pages, self.max_heap_pages);
+/// A simple version of 'mem balancer'. The difference is that this does not
+/// collect any statistics, and instead use a constant to compute the new heap size
+/// from the square root of the live size.
+pub struct SimpleLiveSqrtTrigger {
+    state: HeapResizingState,
+}
 
-        self.current_heap_pages.store(new_heap2, Ordering::Relaxed);
+impl SimpleLiveSqrtTrigger {
+    fn new(min_heap_pages: usize, max_heap_pages: usize) -> Self {
+        Self {
+            state: HeapResizingState::new(min_heap_pages, max_heap_pages),
+        }
+    }
+
+    fn compute_new_heap(live: usize, extra_reserve: usize) -> usize {
+        // Use a constant to replace the resizing factor from statistics
+        live + (live as f64 * 4096f64).sqrt() as usize + extra_reserve
+    }
+}
+
+impl<VM: VMBinding> GCTriggerPolicy<VM> for SimpleLiveSqrtTrigger {
+    fn on_pending_allocation(&self, pages: usize) {
+        self.state.set_pending_pages(pages);
+    }
+    fn on_gc_end(&self, mmtk: &'static MMTK<VM>) {
+        let live = mmtk.plan.get_reserved_pages();
+        let extra_reserve = mmtk.plan.get_collection_reserved_pages();
+        let optimal = Self::compute_new_heap(live, extra_reserve + self.state.get_pending_pages());
+        self.state.set_new_heap_size(optimal);
+    }
+    fn get_heap_size_in_pages(&self) -> usize {
+        self.state.get_cur_heap_size()
+    }
+
+    fn can_heap_size_grow(&self) -> bool {
+        !self.state.is_max_heap_size_now()
     }
 }
