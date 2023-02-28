@@ -487,7 +487,7 @@ impl MemBalancerTrigger {
         let pending_pages = self.pending_pages.load(Ordering::SeqCst);
 
         // This is the optimal heap limit due to mem balancer. We will need to clamp the value to the defined min/max range.
-        let optimal_heap = live + e2 as usize + extra_reserve + pending_pages;
+        let optimal_heap = live + e as usize + extra_reserve + pending_pages;
         trace!(
             "optimal = live {} + sqrt(live) {} + extra {}",
             live,
@@ -501,6 +501,11 @@ impl MemBalancerTrigger {
             "MemBalander: new heap limit = {} pages (optimal = {}, clamped to [{}, {}])",
             new_heap, optimal_heap, self.min_heap_pages, self.max_heap_pages
         );
+
+        let optimal_heap2 = live + e2 as usize + extra_reserve + pending_pages;
+        let new_heap2 = optimal_heap2.clamp(self.min_heap_pages, self.max_heap_pages);
+        eprintln!("Heap resize: membalancer = {}, simple = {} (min/max={}/{})", new_heap, new_heap2, self.min_heap_pages, self.max_heap_pages);
+
         self.current_heap_pages.store(new_heap, Ordering::Relaxed);
     }
 }
