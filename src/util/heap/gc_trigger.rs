@@ -504,8 +504,8 @@ impl MemBalancerTrigger {
 
         let optimal_heap2 = live + e2 as usize + extra_reserve + pending_pages;
         let new_heap2 = optimal_heap2.clamp(self.min_heap_pages, self.max_heap_pages);
-        eprintln!("Heap resize: membalancer = {}, simple = {} (min/max={}/{})", new_heap, new_heap2, self.min_heap_pages, self.max_heap_pages);
+        eprintln!("Heap resize: membalancer = {}, simple = {} (live={}, min/max={}/{})", optimal_heap, optimal_heap2, live, self.min_heap_pages, self.max_heap_pages);
 
-        self.current_heap_pages.store(new_heap, Ordering::Relaxed);
+        self.current_heap_pages.store(new_heap2, Ordering::Relaxed);
     }
 }
