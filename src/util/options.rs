@@ -632,6 +632,12 @@ mod gc_trigger_tests {
     }
 }
 
+#[derive(Copy, Clone, EnumString, Debug)]
+pub enum HeapResizingHeuristics {
+    MemBalancer,
+    SimpleLiveSqrt,
+}
+
 // Currently we allow all the options to be set by env var for the sake of convenience.
 // At some point, we may disallow this and all the options can only be set by command line.
 options! {
@@ -712,7 +718,9 @@ options! {
     thread_affinity:        AffinityKind         [env_var: true, command_line: true] [|v: &AffinityKind| v.validate()] = AffinityKind::OsDefault,
     // Set the GC trigger. This defines the heap size and how MMTk triggers a GC.
     // Default to a fixed heap size of 0.5x physical memory.
-    gc_trigger     :        GCTriggerSelector    [env_var: true, command_line: true] [|v: &GCTriggerSelector| v.validate()] = GCTriggerSelector::FixedHeapSize((crate::util::memory::get_system_total_memory() as f64 * 0.5f64) as usize)
+    gc_trigger     :        GCTriggerSelector    [env_var: true, command_line: true] [|v: &GCTriggerSelector| v.validate()] = GCTriggerSelector::FixedHeapSize((crate::util::memory::get_system_total_memory() as f64 * 0.5f64) as usize),
+    // Set heuristics for heap resizing. This is only used when `gc_trigger` is set to `DynamicHeapSize`.
+    heap_resizing  :        HeapResizingHeuristics [env_var: true, command_line: true] [always_valid] = HeapResizingHeuristics::MemBalancer
 }
 
 #[cfg(test)]
