@@ -17,7 +17,7 @@ use crate::util::sanity::sanity_checker::SanityChecker;
 use crate::vm::ReferenceGlue;
 use crate::vm::VMBinding;
 use std::default::Default;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -93,6 +93,10 @@ pub struct MMTK<VM: VMBinding> {
     #[cfg(feature = "extreme_assertions")]
     pub(crate) edge_logger: EdgeLogger<VM::VMEdge>,
     inside_harness: AtomicBool,
+    /// The mutators that are created. We increase this counter when we create a mutator, and decrease when we destroy a mutator.
+    /// This is currently only used for assertions.
+    #[cfg(debug_assertions)]
+    pub(crate) active_mutators: AtomicUsize,
 }
 
 impl<VM: VMBinding> MMTK<VM> {
@@ -138,6 +142,8 @@ impl<VM: VMBinding> MMTK<VM> {
             inside_harness: AtomicBool::new(false),
             #[cfg(feature = "extreme_assertions")]
             edge_logger: EdgeLogger::new(),
+            #[cfg(debug_assertions)]
+            active_mutators: AtomicUsize::new(0),
         }
     }
 

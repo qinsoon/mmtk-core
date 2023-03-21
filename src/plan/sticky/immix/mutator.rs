@@ -45,6 +45,6 @@ pub fn create_stickyimmix_mutator<VM: VMBinding>(
         ))),
         mutator_tls,
         config,
-        plan: &*mmtk.plan,
+        mmtk,
     }
 }

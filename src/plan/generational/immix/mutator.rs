@@ -45,6 +45,6 @@ pub fn create_genimmix_mutator<VM: VMBinding>(
         ))),
         mutator_tls,
         config,
-        plan: genimmix,
+        mmtk,
     }
 }

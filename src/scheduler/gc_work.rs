@@ -45,10 +45,36 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Prepare<C> {
         let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };
         plan_mut.prepare(worker.tls);
 
+        // Count how many mutators we will prepare, and check it against mmtk.active_mutators.
+        // They should be the same. Otherwise, the binding may have made a mistake somewhere.
+        #[cfg(debug_assertions)]
+        let mut mutators_to_prepare = 0;
+
         for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
             mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                 .add(PrepareMutator::<C::VM>::new(mutator));
+            
+            #[cfg(debug_assertions)]
+            {
+                mutators_to_prepare += 1;
+            }
         }
+
+        // Check if the number of mutators matches what we expect.
+        #[cfg(debug_assertions)]
+        {
+            let active_mutators = mmtk.active_mutators.load(std::sync::atomic::Ordering::SeqCst);
+            if mutators_to_prepare != active_mutators {
+                warn!(
+                    "ActivePlan::mutators() returned {} mutators, but the number of active mutators should be {}.
+                    Possible reasons are: 1. the binding does not call destroy_mutator() when a mutator dies, 
+                    2. the binding does not enumerate all the mutators",
+                    mutators_to_prepare,
+                    active_mutators
+                );
+            }
+        }
+
         for w in &mmtk.scheduler.worker_group.workers_shared {
             let result = w.designated_work.push(Box::new(PrepareCollector));
             debug_assert!(result.is_ok());

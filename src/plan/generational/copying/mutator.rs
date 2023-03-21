@@ -47,6 +47,6 @@ pub fn create_gencopy_mutator<VM: VMBinding>(
         ))),
         mutator_tls,
         config,
-        plan: gencopy,
+        mmtk,
     }
 }

@@ -1,5 +1,6 @@
 //! Mutator context for each application thread.
 
+use crate::MMTK;
 use crate::plan::barriers::Barrier;
 use crate::plan::global::Plan;
 use crate::plan::AllocationSemantics;
@@ -69,7 +70,8 @@ pub struct Mutator<VM: VMBinding> {
     pub barrier: Box<dyn Barrier<VM>>,
     /// The mutator thread that is bound with this Mutator struct.
     pub mutator_tls: VMMutatorThread,
-    pub plan: &'static dyn Plan<VM = VM>,
+    /// The MMTk instance which this mutator belongs to.
+    pub mmtk: &'static MMTK<VM>,
     pub config: MutatorConfig<VM>,
 }
 
@@ -146,6 +148,10 @@ impl<VM: VMBinding> Mutator<VM> {
         for selector in self.get_all_allocator_selectors() {
             unsafe { self.allocators.get_allocator_mut(selector) }.on_mutator_destroy();
         }
+
+        // Decrease the active mutator counter.
+        #[cfg(debug_assertions)]
+        self.mmtk.active_mutators.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 

@@ -37,10 +37,10 @@ pub fn create_mutator<VM: VMBinding>(
     tls: VMMutatorThread,
     mmtk: &'static MMTK<VM>,
 ) -> Box<Mutator<VM>> {
-    Box::new(match *mmtk.options.plan {
-        PlanSelector::NoGC => crate::plan::nogc::mutator::create_nogc_mutator(tls, &*mmtk.plan),
+    let mutator = Box::new(match *mmtk.options.plan {
+        PlanSelector::NoGC => crate::plan::nogc::mutator::create_nogc_mutator(tls, mmtk),
         PlanSelector::SemiSpace => {
-            crate::plan::semispace::mutator::create_ss_mutator(tls, &*mmtk.plan)
+            crate::plan::semispace::mutator::create_ss_mutator(tls, mmtk)
         }
         PlanSelector::GenCopy => {
             crate::plan::generational::copying::mutator::create_gencopy_mutator(tls, mmtk)
@@ -49,19 +49,25 @@ pub fn create_mutator<VM: VMBinding>(
             crate::plan::generational::immix::mutator::create_genimmix_mutator(tls, mmtk)
         }
         PlanSelector::MarkSweep => {
-            crate::plan::marksweep::mutator::create_ms_mutator(tls, &*mmtk.plan)
+            crate::plan::marksweep::mutator::create_ms_mutator(tls, mmtk)
         }
-        PlanSelector::Immix => crate::plan::immix::mutator::create_immix_mutator(tls, &*mmtk.plan),
+        PlanSelector::Immix => crate::plan::immix::mutator::create_immix_mutator(tls, mmtk),
         PlanSelector::PageProtect => {
-            crate::plan::pageprotect::mutator::create_pp_mutator(tls, &*mmtk.plan)
+            crate::plan::pageprotect::mutator::create_pp_mutator(tls, mmtk)
         }
         PlanSelector::MarkCompact => {
-            crate::plan::markcompact::mutator::create_markcompact_mutator(tls, &*mmtk.plan)
+            crate::plan::markcompact::mutator::create_markcompact_mutator(tls, mmtk)
         }
         PlanSelector::StickyImmix => {
             crate::plan::sticky::immix::mutator::create_stickyimmix_mutator(tls, mmtk)
         }
-    })
+    });
+
+    // Increase active mutators by 1. The counter is decreased when we destroy mutators.
+    #[cfg(debug_assertions)]
+    mmtk.active_mutators.fetch_add(1, Ordering::SeqCst);
+
+    mutator
 }
 
 pub fn create_plan<VM: VMBinding>(
