@@ -94,12 +94,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBuf<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         // Flip the per-object unlogged bits to "unlogged" state.
         for obj in &self.modbuf {
-            <E::VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC.store_atomic::<E::VM, u8>(
-                *obj,
-                1,
-                None,
-                Ordering::SeqCst,
-            );
+            <E::VM as VMBinding>::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<E::VM>(*obj, Ordering::SeqCst);
         }
         // scan modbuf only if the current GC is a nursery GC
         if mmtk.plan.generational().unwrap().is_current_gc_nursery() {

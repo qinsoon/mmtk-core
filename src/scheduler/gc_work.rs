@@ -657,7 +657,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
             self.flush();
         }
         #[cfg(feature = "sanity")]
-        if self.roots {
+        if self.roots && !_mmtk.plan.is_in_sanity() {
             self.cache_roots_for_sanity_gc();
         }
         trace!("ProcessEdgesWork End");
@@ -716,6 +716,7 @@ impl<E: ProcessEdgesWork> Clone for ProcessEdgesWorkRootsWorkFactory<E> {
 
 impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsWorkFactory<E> {
     fn create_process_edge_roots_work(&mut self, edges: Vec<EdgeOf<E>>) {
+        debug!("Create process edge roots work: {:?}", edges);
         crate::memory_manager::add_work_packet(
             self.mmtk,
             WorkBucketStage::Closure,
@@ -725,6 +726,7 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsW
 
     fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>) {
         // We want to use E::create_scan_work.
+        debug!("Create process nodes roots work: {:?}", nodes);
         let process_edges_work = E::new(vec![], true, self.mmtk);
         let work = process_edges_work.create_scan_work(nodes, true);
         crate::memory_manager::add_work_packet(self.mmtk, WorkBucketStage::Closure, work);
@@ -777,7 +779,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
 
         #[cfg(feature = "sanity")]
         {
-            if self.roots() {
+            if self.roots() && !mmtk.plan.is_in_sanity() {
                 mmtk.sanity_checker
                     .lock()
                     .unwrap()
@@ -799,7 +801,9 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
             let mut process_edges_work = Self::E::new(vec![], false, mmtk);
 
             for object in buffer.iter().copied() {
+                trace!("Node scan root: trace object {}", object);
                 let new_object = process_edges_work.trace_object(object);
+                trace!("Enqueue'd nodes: {:?}", process_edges_work.nodes);
                 debug_assert_eq!(
                     object, new_object,
                     "Object moved while tracing root unmovable root object: {} -> {}",
@@ -836,6 +840,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
                     scan_later.push(object);
                 }
             }
+            closure.flush();
         }
 
         // If any object does not support edge-enqueuing, we process them now.

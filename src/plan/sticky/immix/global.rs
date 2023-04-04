@@ -116,6 +116,7 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
             // Prepare both large object space and immix space
             self.immix.immix_space.prepare(false);
             self.immix.common.los.prepare(false);
+            // self.immix.common.prepare(tls, false);
         } else {
             self.full_heap_gc_count.lock().unwrap().inc();
             self.immix.prepare(tls);
@@ -169,7 +170,11 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
         if self.is_current_gc_nursery() {
             // Every reachable object should be logged
             if !VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.is_unlogged::<VM>(object, Ordering::SeqCst) {
-                error!("Object {} is not unlogged (all objects that have been traced should be unlogged/mature)", object);
+                error!("Object {} is not unlogged (all objects that have been traced should be unlogged/mature).", object);
+                if self.immix.immix_space.in_space(object) {
+                    let is_marked = self.immix.immix_space.is_marked(object);
+                    error!("Object is in immix space, and is marked? {}", is_marked);
+                }
                 return false;
             }
 
@@ -198,7 +203,20 @@ impl<VM: VMBinding> GenerationalPlan for StickyImmix<VM> {
     }
 
     fn is_object_in_nursery(&self, object: crate::util::ObjectReference) -> bool {
-        self.immix.immix_space.in_space(object) && !self.immix.immix_space.is_marked(object)
+        if self.immix.immix_space.in_space(object) {
+            let nursery = !self.immix.immix_space.is_marked(object);
+
+            // #[cfg(debug_assertions)]
+            // if self.is_current_gc_nursery() {
+                // let unlogged = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.is_unlogged::<VM>(object, Ordering::SeqCst);
+                // debug_assert!((nursery && !unlogged) || (!nursery && unlogged), "Object {} is {}in nursery (mark bit = {}), but is {}unlogged (log bit = {})",
+                //     object, if nursery { "" } else { "NOT " }, VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(object, None, Ordering::SeqCst),
+                //     if unlogged { "" } else { "NOT " }, VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.load_atomic::<VM, u8>(object, None, Ordering::SeqCst),
+                // );
+            // }
+            return nursery;
+        }
+        false
     }
 
     // This check is used for memory slice copying barrier, where we only know addresses instead of objects.
@@ -283,10 +301,10 @@ impl<VM: VMBinding> crate::plan::generational::global::GenerationalPlanExt<VM> f
                 .trace_object::<Q>(queue, object);
         }
 
-        warn!(
-            "Object {} is not in nursery or in LOS, it is not traced!",
-            object
-        );
+        // panic!(
+        //     "Object {} is not in nursery or in LOS, it is not traced!",
+        //     object
+        // );
         object
     }
 }

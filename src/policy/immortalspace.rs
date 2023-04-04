@@ -59,20 +59,28 @@ impl<VM: VMBinding> SFT for ImmortalSpace<VM> {
         true
     }
     fn initialize_object_metadata(&self, object: ObjectReference, _alloc: bool) {
-        let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
-            object,
-            None,
-            Ordering::SeqCst,
-        );
-        let new_value = (old_value & GC_MARK_BIT_MASK) | self.mark_state;
+        // let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
+        //     object,
+        //     None,
+        //     Ordering::SeqCst,
+        // );
+        // let new_value = (old_value & GC_MARK_BIT_MASK) | self.mark_state;
+        // VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store_atomic::<VM, u8>(
+        //     object,
+        //     new_value,
+        //     None,
+        //     Ordering::SeqCst,
+        // );
+        trace!("Post alloc on immortal object {}", object);
         VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store_atomic::<VM, u8>(
             object,
-            new_value,
+            self.mark_state,
             None,
             Ordering::SeqCst,
         );
 
         if self.common.needs_log_bit {
+            info!("Log immortal object {:?}", object);
             VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
         }
         #[cfg(feature = "global_alloc_bit")]
@@ -143,7 +151,7 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
             metadata::extract_side_metadata(&[*VM::VMObjectModel::LOCAL_MARK_BIT_SPEC]),
         ));
         ImmortalSpace {
-            mark_state: 0,
+            mark_state: 1,
             pr: if is_discontiguous {
                 MonotonePageResource::new_discontiguous(vm_map)
             } else {
@@ -181,11 +189,11 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
         true
     }
 
-    pub fn prepare(&mut self) {
+    pub fn prepare(&mut self) {}
+
+    pub fn release(&mut self) {
         self.mark_state = GC_MARK_BIT_MASK - self.mark_state;
     }
-
-    pub fn release(&mut self) {}
 
     pub fn trace_object<Q: ObjectQueue>(
         &self,

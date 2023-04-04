@@ -79,9 +79,14 @@ pub fn mmtk_init<VM: VMBinding>(builder: &MMTKBuilder) -> Box<MMTK<VM>> {
     }
     let mmtk = builder.build();
 
-    info!("Initialized MMTk with {:?}", *mmtk.options.plan);
+    info!("Initialized MMTk with {:?} ({} workers)", *mmtk.options.plan, *mmtk.options.threads);
     #[cfg(feature = "extreme_assertions")]
     warn!("The feature 'extreme_assertions' is enabled. MMTk will run expensive run-time checks. Slow performance should be expected.");
+
+    let mut out = String::new();
+    mmtk.plan.get_spaces().iter().for_each(|s| { crate::policy::space::print_vm_map(*s, &mut out); });
+    info!("{}", out);
+
     Box::new(mmtk)
 }
 

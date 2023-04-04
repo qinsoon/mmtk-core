@@ -17,6 +17,7 @@ pub type VectorObjectQueue = VectorQueue<ObjectReference>;
 /// An implementation of `ObjectQueue` using a `Vec`.
 ///
 /// This can also be used as a buffer. For example, the mark stack or the write barrier mod-buffer.
+#[derive(Debug)]
 pub struct VectorQueue<T> {
     /// Enqueued nodes.
     buffer: Vec<T>,
@@ -85,7 +86,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
         }
     }
 
-    fn flush(&mut self) {
+    pub fn flush(&mut self) {
         let buf = self.buffer.take();
         if !buf.is_empty() {
             self.worker.add_work(
@@ -101,10 +102,15 @@ impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
         #[cfg(debug_assertions)]
         {
             use crate::vm::edge_shape::Edge;
+            use crate::policy::sft::SFT;
+            use crate::policy::sft_map::SFTMap;
+            use crate::mmtk::SFT_MAP;
+            let object = slot.load();
             trace!(
-                "(ObjectsClosure) Visit edge {:?} (pointing to {})",
+                "(ObjectsClosure) Visit edge {:?} => pointing to {} ({})",
                 slot,
-                slot.load()
+                object,
+                if let Some(state) = SFT_MAP.get_checked(object.to_address::<E::VM>()).object_state(object) { state } else { "".to_string() }
             );
         }
         self.buffer.push(slot);

@@ -94,6 +94,10 @@ pub trait SFT {
         object: ObjectReference,
         worker: GCWorkerMutRef,
     ) -> ObjectReference;
+
+    fn object_state(&self, object: ObjectReference) -> Option<String> {
+        None
+    }
 }
 
 // Create erased VM refs for these types that will be used in `sft_trace_object()`.
