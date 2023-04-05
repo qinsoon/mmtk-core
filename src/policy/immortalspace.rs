@@ -71,7 +71,6 @@ impl<VM: VMBinding> SFT for ImmortalSpace<VM> {
         //     None,
         //     Ordering::SeqCst,
         // );
-        trace!("Post alloc on immortal object {}", object);
         VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store_atomic::<VM, u8>(
             object,
             self.mark_state,
@@ -80,7 +79,6 @@ impl<VM: VMBinding> SFT for ImmortalSpace<VM> {
         );
 
         if self.common.needs_log_bit {
-            info!("Log immortal object {:?}", object);
             VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
         }
         #[cfg(feature = "global_alloc_bit")]

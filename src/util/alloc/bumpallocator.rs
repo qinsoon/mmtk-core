@@ -79,9 +79,6 @@ impl<VM: VMBinding> Allocator<VM> for BumpAllocator<VM> {
                 self.cursor,
                 self.limit
             );
-            if self.space.name() == "immortal" {
-                info!("Allocate immortal object: {}", result);
-            }
             result
         }
     }

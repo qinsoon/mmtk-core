@@ -17,6 +17,11 @@ pub fn zero(start: Address, len: usize) {
     wrap_libc_call(&|| unsafe { libc::memset(ptr, 0, len) }, ptr).unwrap()
 }
 
+pub fn set(start: Address, val: u8, len: usize) {
+    let ptr = start.to_mut_ptr();
+    wrap_libc_call(&|| unsafe { libc::memset(ptr, val as i32, len) }, ptr).unwrap()
+}
+
 /// Demand-zero mmap:
 /// This function mmaps the memory and guarantees to zero all mapped memory.
 /// This function WILL overwrite existing memory mapping. The user of this function
