@@ -58,7 +58,7 @@ impl Map for Map64 {
     }
 
     fn insert(&self, start: Address, extent: usize, descriptor: SpaceDescriptor) {
-        debug_assert!(Self::is_space_start(start));
+        debug_assert!(Self::is_space_start(start), "{} is not space start", start);
         debug_assert!(extent <= SPACE_SIZE_64);
         // Each space will call this on exclusive address ranges. It is fine to mutate the descriptor map,
         // as each space will update different indices.

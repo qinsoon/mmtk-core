@@ -159,6 +159,14 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
         }
     }
 
+    pub(super) fn new_customized(pr: MonotonePageResource<VM>, common: CommonSpace<VM>) -> Self {
+        Self {
+            mark_state: 1,
+            pr,
+            common,
+        }
+    }
+
     fn test_and_mark(object: ObjectReference, value: u8) -> bool {
         loop {
             let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(

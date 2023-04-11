@@ -118,10 +118,13 @@ mod space_map {
                 // Make sure we only update from empty to a valid space, or overwrite the space
                 let old = mut_self.sft[index];
                 assert!(old.name() == EMPTY_SFT_NAME || old.name() == space.name());
-                // Make sure the range is in the space
-                let space_start = Self::index_to_space_start(index);
-                assert!(start >= space_start);
-                assert!(start + bytes <= space_start + MAX_SPACE_EXTENT);
+                // Make sure the range is in the space.
+                // FIXME: Curerntly comment out this check. The following works fine for MMTk internal spaces,
+                // but the VM space is an exception. Any address after the last space is considered as the last space,
+                // based on our indexing function. In that case, we cannot assume the end of the region is within the last space (with MAX_SPACE_EXTENT).
+                // let space_start = Self::index_to_space_start(index);
+                // assert!(start >= space_start);
+                // assert!(start + bytes <= space_start + MAX_SPACE_EXTENT); // Probably we can just remove this check
             }
             *mut_self.sft.get_unchecked_mut(index) = space;
         }

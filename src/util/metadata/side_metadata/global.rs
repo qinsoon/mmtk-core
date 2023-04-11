@@ -882,6 +882,7 @@ impl std::hash::Hash for SideMetadataOffset {
 
 /// This struct stores all the side metadata specs for a policy. Generally a policy needs to know its own
 /// side metadata spec as well as the plan's specs.
+#[derive(Debug)]
 pub struct SideMetadataContext {
     // For plans
     pub global: Vec<SideMetadataSpec>,
