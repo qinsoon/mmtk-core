@@ -177,8 +177,9 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutators<E> {
         // If the VM requires that only the coordinator thread can stop the world,
         // we delegate the work to the coordinator.
         if <E::VM as VMBinding>::VMCollection::COORDINATOR_ONLY_STW && !worker.is_coordinator() {
-            mmtk.scheduler
-                .add_coordinator_work(StopMutators::<E>::new(), worker);
+            worker
+                .sender
+                .add_coordinator_work(Box::new(StopMutators::<E>::new()));
             return;
         }
 
@@ -799,6 +800,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         let scanned_root_objects = self.roots().then(|| {
             // We create an instance of E to use its `trace_object` method and its object queue.
             let mut process_edges_work = Self::E::new(vec![], false, mmtk);
+            process_edges_work.set_worker(worker);
 
             for object in buffer.iter().copied() {
                 trace!("Node scan root: trace object {}", object);

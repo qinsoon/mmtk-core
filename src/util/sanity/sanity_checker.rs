@@ -36,13 +36,10 @@ impl<ES: Edge> SanityChecker<ES> {
 
     /// Cache a list of root edges to the sanity checker.
     pub fn add_root_edges(&mut self, roots: Vec<ES>) {
-        trace!("Add sanity root edges: {:?}", roots);
         self.root_edges.push(roots)
     }
 
     pub fn add_root_nodes(&mut self, roots: Vec<ObjectReference>) {
-        trace!("Add sanity root nodes: {:?}", roots);
-        trace!("\n{}", std::backtrace::Backtrace::capture());
         self.root_nodes.push(roots)
     }
 
@@ -86,9 +83,6 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
         // }
         {
             let sanity_checker = mmtk.sanity_checker.lock().unwrap();
-            debug!("Sanity cached roots:");
-            debug!("edges: {:?}", sanity_checker.root_edges);
-            debug!("nodes: {:?}", sanity_checker.root_nodes);
             for roots in &sanity_checker.root_edges {
                 scheduler.work_buckets[WorkBucketStage::Closure].add(
                     SanityGCProcessEdges::<P::VM>::new(roots.clone(), true, mmtk),
