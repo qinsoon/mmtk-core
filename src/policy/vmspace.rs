@@ -181,9 +181,11 @@ impl<VM: VMBinding> VMSpace<VM> {
         //     VMRequest::fixed_size(boot_segment_mb),
         // ));
         info!("start {} is aligned to {}, bytes = {}", boot_segment_start, boot_segment_start_aligned, boot_segment_bytes_aligned);
+        // As we create an immortal space, we use the same side metadata as immortal space.
+        let side_metadata = metadata::extract_side_metadata(&[*VM::VMObjectModel::LOCAL_MARK_BIT_SPEC]);
         let space = ImmortalSpace::new_customized(
             MonotonePageResource::new_contiguous(boot_segment_start_aligned, boot_segment_bytes_aligned, args.global_args.vm_map),
-            CommonSpace::new(args.get_space_args("vm_spce", false, VMRequest::fixed(boot_segment_start_aligned, boot_segment_bytes_aligned)).into_vm_space_args()),
+            CommonSpace::new(args.get_space_args("vm_spce", false, VMRequest::fixed(boot_segment_start_aligned, boot_segment_bytes_aligned)).into_vm_space_args(side_metadata)),
         );
 
         // The space is mapped externally by the VM. We need to update our mmapper to mark the range as mapped.

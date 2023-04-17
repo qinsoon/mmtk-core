@@ -452,11 +452,12 @@ impl<'a, VM: VMBinding> PlanCreateSpaceArgs<'a, VM> {
 
     pub fn into_vm_space_args(
         self,
+        policy_metadata_specs: Vec<SideMetadataSpec>,
     ) -> PolicyCreateSpaceArgs<'a, VM> {
         PolicyCreateSpaceArgs {
             movable: false,
             immortal: true,
-            local_side_metadata_specs: vec![],
+            local_side_metadata_specs: policy_metadata_specs,
             plan_args: self,
             vm_space: true,
         }
