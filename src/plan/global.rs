@@ -344,8 +344,8 @@ pub trait Plan: 'static + Sync + Downcast {
     /// tracing and releasing). A plan can implement this to
     /// use plan specific semantics to check if the object is sane.
     /// Return true if the object is considered valid by the plan.
-    fn sanity_check_object(&self, _object: ObjectReference) -> bool {
-        true
+    fn sanity_check_object(&self, object: ObjectReference) -> bool {
+        object.is_live()
     }
 }
 
