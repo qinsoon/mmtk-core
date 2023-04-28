@@ -96,6 +96,14 @@ impl<VM: VMBinding> Space<VM> for VMSpace<VM> {
                 local: vec![],
             })
     }
+
+    fn address_in_space(&self, start: Address) -> bool {
+        if let Some(space) = self.space_maybe() {
+            space.address_in_space(start)
+        } else {
+            false
+        }
+    }
 }
 
 use crate::scheduler::GCWorker;
