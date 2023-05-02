@@ -23,6 +23,8 @@ pub mod edge_shape;
 pub(crate) mod object_model;
 mod reference_glue;
 mod scanning;
+#[cfg(feature = "vm_space")]
+pub mod vmspace;
 pub use self::active_plan::ActivePlan;
 pub use self::collection::Collection;
 pub use self::collection::GCThreadContext;
@@ -54,6 +56,9 @@ where
     type VMEdge: edge_shape::Edge;
     /// The type of heap memory slice in this VM.
     type VMMemorySlice: edge_shape::MemorySlice<Edge = Self::VMEdge>;
+    /// The type of memory space that is created and managed by the runtime.
+    #[cfg(feature = "vm_space")]
+    type VMSpace: vmspace::VMSpace<Self>;
 
     /// A value to fill in alignment gaps. This value can be used for debugging.
     const ALIGNMENT_VALUE: usize = 0xdead_beef;

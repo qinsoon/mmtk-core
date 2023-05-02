@@ -217,7 +217,7 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
 
     /// Trace objects for spaces in generational and common plans for a full heap GC.
     #[allow(unused)] // We now use `PlanTraceObject`, and this mehtod is not used.
-    pub fn trace_object_full_heap<Q: ObjectQueue>(
+    pub fn trace_object_full_heap<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         queue: &mut Q,
         object: ObjectReference,
@@ -231,7 +231,7 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
                 worker,
             );
         }
-        self.common.trace_object::<Q>(queue, object, worker)
+        self.common.trace_object::<Q, KIND>(queue, object, worker)
     }
 
     /// Trace objects for spaces in generational and common plans for a nursery GC.

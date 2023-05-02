@@ -9,7 +9,7 @@ use crate::policy::immortalspace::ImmortalSpace;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::{PlanCreateSpaceArgs, Space};
 #[cfg(feature = "vm_space")]
-use crate::policy::vmspace::VMSpace;
+use crate::vm::vmspace::VMSpace;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(feature = "analysis")]
@@ -425,27 +425,27 @@ pub struct BasePlan<VM: VMBinding> {
     ///     the VM space.
     #[cfg(feature = "vm_space")]
     #[trace]
-    pub vm_space: VMSpace<VM>,
+    pub vm_space: VM::VMSpace,
 }
 
-#[cfg(feature = "vm_space")]
-pub fn create_vm_space<VM: VMBinding>(args: &mut CreateSpecificPlanArgs<VM>) -> VMSpace<VM> {
-    use crate::util::constants::LOG_BYTES_IN_MBYTE;
-    let boot_segment_bytes = *args.global_args.options.vm_space_size;
-    debug_assert!(boot_segment_bytes > 0);
+// #[cfg(feature = "vm_space")]
+// pub fn create_vm_space<VM: VMBinding>(args: &mut CreateSpecificPlanArgs<VM>) -> VMSpace<VM> {
+//     use crate::util::constants::LOG_BYTES_IN_MBYTE;
+//     let boot_segment_bytes = *args.global_args.options.vm_space_size;
+//     debug_assert!(boot_segment_bytes > 0);
 
-    use crate::util::conversions::raw_align_up;
-    use crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK;
-    let boot_segment_mb = raw_align_up(boot_segment_bytes, BYTES_IN_CHUNK) >> LOG_BYTES_IN_MBYTE;
+//     use crate::util::conversions::raw_align_up;
+//     use crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK;
+//     let boot_segment_mb = raw_align_up(boot_segment_bytes, BYTES_IN_CHUNK) >> LOG_BYTES_IN_MBYTE;
 
-    let space =
-        VMSpace::new(args.get_space_args("boot", false, VMRequest::fixed_size(boot_segment_mb)));
+//     let space =
+//         VMSpace::new(args.get_space_args("boot", false, VMRequest::fixed_size(boot_segment_mb)));
 
-    // The space is mapped externally by the VM. We need to update our mmapper to mark the range as mapped.
-    space.ensure_mapped();
+//     // The space is mapped externally by the VM. We need to update our mmapper to mark the range as mapped.
+//     space.ensure_mapped();
 
-    space
-}
+//     space
+// }
 
 /// Args needed for creating any plan. This includes a set of contexts from MMTK or global. This
 /// is passed to each plan's constructor.
@@ -519,7 +519,7 @@ impl<VM: VMBinding> BasePlan<VM> {
                 VMRequest::discontiguous(),
             )),
             #[cfg(feature = "vm_space")]
-            vm_space: create_vm_space(&mut args),
+            vm_space: VM::VMSpace::new(args.get_space_args("vm_space", false, VMRequest::discontiguous())),
 
             initialized: AtomicBool::new(false),
             trigger_gc_when_heap_is_full: AtomicBool::new(true),
@@ -626,7 +626,7 @@ impl<VM: VMBinding> BasePlan<VM> {
         pages
     }
 
-    pub fn trace_object<Q: ObjectQueue>(
+    pub fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
         queue: &mut Q,
         object: ObjectReference,
@@ -652,8 +652,9 @@ impl<VM: VMBinding> BasePlan<VM> {
 
         #[cfg(feature = "vm_space")]
         if self.vm_space.in_space(object) {
+            use crate::policy::gc_work::PolicyTraceObject;
             trace!("trace_object: object in boot space");
-            return self.vm_space.trace_object(queue, object);
+            return self.vm_space.trace_object::<Q, KIND>(queue, object, None, worker);
         }
 
         VM::VMActivePlan::vm_trace_object::<Q>(queue, object, worker)
@@ -928,7 +929,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
             + self.base.get_used_pages()
     }
 
-    pub fn trace_object<Q: ObjectQueue>(
+    pub fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
         queue: &mut Q,
         object: ObjectReference,
@@ -946,7 +947,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
             trace!("trace_object: object in nonmoving space");
             return self.nonmoving.trace_object(queue, object);
         }
-        self.base.trace_object::<Q>(queue, object, worker)
+        self.base.trace_object::<Q, KIND>(queue, object, worker)
     }
 
     pub fn prepare(&mut self, tls: VMWorkerThread, full_heap: bool) {
