@@ -79,7 +79,10 @@ pub fn mmtk_init<VM: VMBinding>(builder: &MMTKBuilder) -> Box<MMTK<VM>> {
     }
     let mmtk = builder.build();
 
-    info!("Initialized MMTk with {:?} ({} workers)", *mmtk.options.plan, *mmtk.options.threads);
+    info!(
+        "Initialized MMTk with {:?} ({} workers)",
+        *mmtk.options.plan, *mmtk.options.threads
+    );
     #[cfg(feature = "extreme_assertions")]
     warn!("The feature 'extreme_assertions' is enabled. MMTk will run expensive run-time checks. Slow performance should be expected.");
 
@@ -454,11 +457,6 @@ pub fn start_worker<VM: VMBinding>(
     worker: &mut GCWorker<VM>,
 ) {
     worker.run(tls, mmtk);
-}
-
-#[cfg(feature = "vm_space")]
-pub fn lazy_init_vm_space<VM: VMBinding>(mmtk: &'static mut MMTK<VM>, start: Address, size: usize) {
-    mmtk.plan.base_mut().vm_space.lazy_initialize(start, size);
 }
 
 /// Initialize the scheduler and GC workers that are required for doing garbage collections.

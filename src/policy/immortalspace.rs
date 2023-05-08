@@ -158,14 +158,6 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
         }
     }
 
-    pub(super) fn new_customized(pr: MonotonePageResource<VM>, common: CommonSpace<VM>) -> Self {
-        Self {
-            mark_state: MarkState::new(),
-            pr,
-            common,
-        }
-    }
-
     pub fn prepare(&mut self) {
         self.mark_state.on_global_prepare::<VM>();
         if self.vm_space {

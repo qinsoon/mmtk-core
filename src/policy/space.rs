@@ -253,7 +253,11 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
     /// Ensure this space is marked as mapped -- used when the space is already
     /// mapped (e.g. for a vm image which is externally mmapped.)
     fn ensure_mapped(&self) {
-        info!("Mmap for {} metadata: {:?}", self.common().name, self.common().metadata);
+        info!(
+            "Mmap for {} metadata: {:?}",
+            self.common().name,
+            self.common().metadata
+        );
         if self
             .common()
             .metadata

@@ -6,8 +6,6 @@ use crate::mmtk::MMTK;
 use crate::plan::tracing::ObjectQueue;
 use crate::plan::Mutator;
 use crate::policy::immortalspace::ImmortalSpace;
-#[cfg(feature = "vm_space")]
-use crate::policy::vmspace::VMSpace;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::{PlanCreateSpaceArgs, Space};
 #[cfg(feature = "vm_space")]
@@ -34,7 +32,6 @@ use downcast_rs::Downcast;
 use enum_map::EnumMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::mem::MaybeUninit;
 
 use mmtk_macros::PlanTraceObject;
 

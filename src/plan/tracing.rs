@@ -101,16 +101,21 @@ impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
     fn visit_edge(&mut self, slot: EdgeOf<E>) {
         #[cfg(debug_assertions)]
         {
-            use crate::vm::edge_shape::Edge;
-            use crate::policy::sft::SFT;
-            use crate::policy::sft_map::SFTMap;
             use crate::mmtk::SFT_MAP;
+            use crate::vm::edge_shape::Edge;
             let object = slot.load();
             trace!(
                 "(ObjectsClosure) Visit edge {:?} => pointing to {} ({})",
                 slot,
                 object,
-                if let Some(state) = SFT_MAP.get_checked(object.to_address::<E::VM>()).object_state(object) { state } else { "".to_string() }
+                if let Some(state) = SFT_MAP
+                    .get_checked(object.to_address::<E::VM>())
+                    .object_state(object)
+                {
+                    state
+                } else {
+                    "".to_string()
+                }
             );
         }
         self.buffer.push(slot);

@@ -95,7 +95,7 @@ pub trait SFT {
         worker: GCWorkerMutRef,
     ) -> ObjectReference;
 
-    fn object_state(&self, object: ObjectReference) -> Option<String> {
+    fn object_state(&self, _object: ObjectReference) -> Option<String> {
         None
     }
 }

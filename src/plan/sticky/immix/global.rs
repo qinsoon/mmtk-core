@@ -212,11 +212,11 @@ impl<VM: VMBinding> GenerationalPlan for StickyImmix<VM> {
 
             // #[cfg(debug_assertions)]
             // if self.is_current_gc_nursery() {
-                // let unlogged = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.is_unlogged::<VM>(object, Ordering::SeqCst);
-                // debug_assert!((nursery && !unlogged) || (!nursery && unlogged), "Object {} is {}in nursery (mark bit = {}), but is {}unlogged (log bit = {})",
-                //     object, if nursery { "" } else { "NOT " }, VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(object, None, Ordering::SeqCst),
-                //     if unlogged { "" } else { "NOT " }, VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.load_atomic::<VM, u8>(object, None, Ordering::SeqCst),
-                // );
+            // let unlogged = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.is_unlogged::<VM>(object, Ordering::SeqCst);
+            // debug_assert!((nursery && !unlogged) || (!nursery && unlogged), "Object {} is {}in nursery (mark bit = {}), but is {}unlogged (log bit = {})",
+            //     object, if nursery { "" } else { "NOT " }, VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(object, None, Ordering::SeqCst),
+            //     if unlogged { "" } else { "NOT " }, VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.load_atomic::<VM, u8>(object, None, Ordering::SeqCst),
+            // );
             // }
             return nursery;
         }

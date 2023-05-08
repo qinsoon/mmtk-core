@@ -222,7 +222,12 @@ impl SideMetadataSpec {
         }
     }
 
-    pub fn bulk_initialize_metadata(&self, start: Address, size: usize, init_fn: &impl Fn(Address, u8, Address, u8)) {
+    pub fn bulk_initialize_metadata(
+        &self,
+        start: Address,
+        size: usize,
+        init_fn: &impl Fn(Address, u8, Address, u8),
+    ) {
         // Zero for a contiguous side metadata spec. We can simply calculate the data end address, and
         // calculate the metadata address for the data end.
         let initialize_contiguous = |data_start: Address, data_bytes: usize| {
@@ -1569,7 +1574,8 @@ mod tests {
 
     #[test]
     fn test_bulk_update_meta_bits() {
-        let raw_mem = unsafe { std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(8, 8).unwrap()) };
+        let raw_mem =
+            unsafe { std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(8, 8).unwrap()) };
         let addr = Address::from_mut_ptr(raw_mem);
 
         SideMetadataSpec::set_meta_bits(addr, 0, addr, 4);
