@@ -253,6 +253,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
     /// Ensure this space is marked as mapped -- used when the space is already
     /// mapped (e.g. for a vm image which is externally mmapped.)
     fn ensure_mapped(&self) {
+        info!("Mmap for {} metadata: {:?}", self.common().name, self.common().metadata);
         if self
             .common()
             .metadata
@@ -414,6 +415,7 @@ pub struct PolicyCreateSpaceArgs<'a, VM: VMBinding> {
     pub movable: bool,
     pub immortal: bool,
     pub local_side_metadata_specs: Vec<SideMetadataSpec>,
+    pub vm_space: bool,
 }
 
 /// Arguments passed from a plan to create a space.
@@ -444,6 +446,20 @@ impl<'a, VM: VMBinding> PlanCreateSpaceArgs<'a, VM> {
             immortal,
             local_side_metadata_specs: policy_metadata_specs,
             plan_args: self,
+            vm_space: false,
+        }
+    }
+
+    pub fn into_vm_space_args(
+        self,
+        policy_metadata_specs: Vec<SideMetadataSpec>,
+    ) -> PolicyCreateSpaceArgs<'a, VM> {
+        PolicyCreateSpaceArgs {
+            movable: false,
+            immortal: true,
+            local_side_metadata_specs: policy_metadata_specs,
+            plan_args: self,
+            vm_space: true,
         }
     }
 }

@@ -182,26 +182,50 @@ impl SideMetadataSpec {
         }
     }
 
-    /// Bulk-zero a specific metadata for a chunk. Note that this method is more sophisiticated than a simple memset, especially in the following
-    /// cases:
-    /// * the metadata for the range includes partial bytes (a few bits in the same byte).
-    /// * for 32 bits local side metadata, the side metadata is stored in discontiguous chunks, we will have to bulk zero for each chunk's side metadata.
-    ///
-    /// # Arguments
-    ///
-    /// * `start`: The starting address of a memory region. The side metadata starting from this data address will be zeroed.
-    /// * `size`: The size of the memory region.
-    ///
-    pub fn bzero_metadata(&self, start: Address, size: usize) {
-        #[cfg(feature = "extreme_assertions")]
-        let _lock = sanity::SANITY_LOCK.lock().unwrap();
+    pub(super) fn set_meta_bits(
+        meta_start_addr: Address,
+        meta_start_bit: u8,
+        meta_end_addr: Address,
+        meta_end_bit: u8,
+    ) {
+        // Start/end is the same, we don't need to do anything.
+        if meta_start_addr == meta_end_addr && meta_start_bit == meta_end_bit {
+            return;
+        }
 
-        #[cfg(feature = "extreme_assertions")]
-        sanity::verify_bzero(self, start, size);
+        // Setting bytes
+        if meta_start_bit == 0 && meta_end_bit == 0 {
+            // println!("memset({}, 0xff, {})", meta_start_addr, meta_end_addr - meta_start_addr);
+            memory::set(meta_start_addr, 0xff, meta_end_addr - meta_start_addr);
+            return;
+        }
 
+        if meta_start_addr == meta_end_addr {
+            // we are setting selected bits in one byte
+            let mask: u8 = !(u8::MAX << meta_end_bit) & (u8::MAX << meta_start_bit); // Get a mask that the bits we need to set are 1, and the other bits are 0.
+
+            // println!("fetch_or {} with mask {:b}", meta_start_addr, mask);
+            unsafe { meta_start_addr.as_ref::<AtomicU8>() }.fetch_or(mask, Ordering::SeqCst);
+        } else if meta_start_addr + 1usize == meta_end_addr && meta_end_bit == 0 {
+            // we are setting the rest bits in one byte
+            let mask = u8::MAX << meta_start_bit; // Get a mask that the bits we need to set are 1, and the other bits are 0.
+
+            // println!("fetch_or {} with mask {:b}", meta_start_addr, mask);
+            unsafe { meta_start_addr.as_ref::<AtomicU8>() }.fetch_or(mask, Ordering::SeqCst);
+        } else {
+            // zero bits in the first byte
+            Self::set_meta_bits(meta_start_addr, meta_start_bit, meta_start_addr + 1usize, 0);
+            // zero bytes in the middle
+            Self::set_meta_bits(meta_start_addr + 1usize, 0, meta_end_addr, 0);
+            // zero bits in the last byte
+            Self::set_meta_bits(meta_end_addr, 0, meta_end_addr, meta_end_bit);
+        }
+    }
+
+    pub fn bulk_initialize_metadata(&self, start: Address, size: usize, init_fn: &impl Fn(Address, u8, Address, u8)) {
         // Zero for a contiguous side metadata spec. We can simply calculate the data end address, and
         // calculate the metadata address for the data end.
-        let zero_contiguous = |data_start: Address, data_bytes: usize| {
+        let initialize_contiguous = |data_start: Address, data_bytes: usize| {
             if data_bytes == 0 {
                 return;
             }
@@ -209,7 +233,7 @@ impl SideMetadataSpec {
             let meta_start_shift = meta_byte_lshift(self, data_start);
             let meta_end = address_to_meta_address(self, data_start + data_bytes);
             let meta_end_shift = meta_byte_lshift(self, data_start + data_bytes);
-            Self::zero_meta_bits(meta_start, meta_start_shift, meta_end, meta_end_shift);
+            init_fn(meta_start, meta_start_shift, meta_end, meta_end_shift);
         };
 
         // Zero for a discontiguous side metadata spec (chunked metadata). The side metadata for different
@@ -220,7 +244,7 @@ impl SideMetadataSpec {
         // Instead, we compute how many bytes/bits we need to zero.
         // The data for which the metadata will be zeroed has to be in the same chunk.
         #[cfg(target_pointer_width = "32")]
-        let zero_discontiguous = |data_start: Address, data_bytes: usize| {
+        let initialize_discontiguous = |data_start: Address, data_bytes: usize| {
             use crate::util::constants::BITS_IN_BYTE;
             if data_bytes == 0 {
                 return;
@@ -251,11 +275,11 @@ impl SideMetadataSpec {
                 (end_addr, end_bit)
             };
 
-            Self::zero_meta_bits(meta_start, meta_start_shift, meta_end, meta_end_shift);
+            init_fn(meta_start, meta_start_shift, meta_end, meta_end_shift);
         };
 
         if cfg!(target_pointer_width = "64") || self.is_global {
-            zero_contiguous(start, size);
+            initialize_contiguous(start, size);
         }
         #[cfg(target_pointer_width = "32")]
         if !self.is_global {
@@ -264,24 +288,54 @@ impl SideMetadataSpec {
                 - start.align_down(BYTES_IN_CHUNK))
                 / BYTES_IN_CHUNK;
             if chunk_num == 0 {
-                zero_discontiguous(start, size);
+                initialize_discontiguous(start, size);
             } else {
                 let second_data_chunk = start.align_up(BYTES_IN_CHUNK);
                 // bzero the first sub-chunk
-                zero_discontiguous(start, second_data_chunk - start);
+                initialize_discontiguous(start, second_data_chunk - start);
 
                 let last_data_chunk = (start + size).align_down(BYTES_IN_CHUNK);
                 // bzero the last sub-chunk
-                zero_discontiguous(last_data_chunk, start + size - last_data_chunk);
+                initialize_discontiguous(last_data_chunk, start + size - last_data_chunk);
                 let mut next_data_chunk = second_data_chunk;
 
                 // bzero all chunks in the middle
                 while next_data_chunk != last_data_chunk {
-                    zero_discontiguous(next_data_chunk, BYTES_IN_CHUNK);
+                    initialize_discontiguous(next_data_chunk, BYTES_IN_CHUNK);
                     next_data_chunk += BYTES_IN_CHUNK;
                 }
             }
         }
+    }
+
+    /// Bulk-zero a specific metadata for a chunk. Note that this method is more sophisiticated than a simple memset, especially in the following
+    /// cases:
+    /// * the metadata for the range includes partial bytes (a few bits in the same byte).
+    /// * for 32 bits local side metadata, the side metadata is stored in discontiguous chunks, we will have to bulk zero for each chunk's side metadata.
+    ///
+    /// # Arguments
+    ///
+    /// * `start`: The starting address of a memory region. The side metadata starting from this data address will be zeroed.
+    /// * `size`: The size of the memory region.
+    ///
+    pub fn bzero_metadata(&self, start: Address, size: usize) {
+        #[cfg(feature = "extreme_assertions")]
+        let _lock = sanity::SANITY_LOCK.lock().unwrap();
+
+        #[cfg(feature = "extreme_assertions")]
+        sanity::verify_bzero(self, start, size);
+
+        self.bulk_initialize_metadata(start, size, &Self::zero_meta_bits)
+    }
+
+    pub fn bset_metadata(&self, start: Address, size: usize) {
+        #[cfg(feature = "extreme_assertions")]
+        let _lock = sanity::SANITY_LOCK.lock().unwrap();
+
+        #[cfg(feature = "extreme_assertions")]
+        sanity::verify_bset(self, start, size);
+
+        self.bulk_initialize_metadata(start, size, &Self::set_meta_bits)
     }
 
     /// This is a wrapper method for implementing side metadata access. It does nothing other than
@@ -827,6 +881,7 @@ impl std::hash::Hash for SideMetadataOffset {
 
 /// This struct stores all the side metadata specs for a policy. Generally a policy needs to know its own
 /// side metadata spec as well as the plan's specs.
+#[derive(Debug)]
 pub struct SideMetadataContext {
     // For plans
     pub global: Vec<SideMetadataSpec>,
@@ -1511,4 +1566,25 @@ mod tests {
             unreachable!()
         }
     );
+
+    #[test]
+    fn test_bulk_update_meta_bits() {
+        let raw_mem = unsafe { std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(8, 8).unwrap()) };
+        let addr = Address::from_mut_ptr(raw_mem);
+
+        SideMetadataSpec::set_meta_bits(addr, 0, addr, 4);
+        assert_eq!(unsafe { addr.load::<u64>() }, 0b1111);
+
+        SideMetadataSpec::zero_meta_bits(addr, 1, addr, 3);
+        assert_eq!(unsafe { addr.load::<u64>() }, 0b1001);
+
+        SideMetadataSpec::set_meta_bits(addr, 2, addr, 6);
+        assert_eq!(unsafe { addr.load::<u64>() }, 0b0011_1101);
+
+        SideMetadataSpec::zero_meta_bits(addr, 0, addr + 1usize, 0);
+        assert_eq!(unsafe { addr.load::<u64>() }, 0b0);
+
+        SideMetadataSpec::set_meta_bits(addr, 0, addr + 1usize, 2);
+        assert_eq!(unsafe { addr.load::<u64>() }, 0b11_1111_1111);
+    }
 }

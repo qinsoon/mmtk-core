@@ -132,6 +132,9 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     ) -> ObjectReference {
         panic!("We do not use SFT to trace objects for Immix. sft_trace_object() cannot be used.")
     }
+    fn object_state(&self, object: ObjectReference) -> Option<String> {
+        Some(format!("marked? {}", self.is_marked(object)))
+    }
 }
 
 impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
@@ -518,6 +521,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         worker: &mut GCWorker<VM>,
         nursery_collection: bool,
     ) -> ObjectReference {
+        unreachable!("Not used for Julia");
+
         let copy_context = worker.get_copy_context_mut();
         debug_assert!(!super::BLOCK_ONLY);
         #[cfg(feature = "vo_bit")]

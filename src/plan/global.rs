@@ -6,6 +6,8 @@ use crate::mmtk::MMTK;
 use crate::plan::tracing::ObjectQueue;
 use crate::plan::Mutator;
 use crate::policy::immortalspace::ImmortalSpace;
+#[cfg(feature = "vm_space")]
+use crate::policy::vmspace::VMSpace;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::{PlanCreateSpaceArgs, Space};
 #[cfg(feature = "vm_space")]
@@ -32,6 +34,7 @@ use downcast_rs::Downcast;
 use enum_map::EnumMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::mem::MaybeUninit;
 
 use mmtk_macros::PlanTraceObject;
 
@@ -343,8 +346,8 @@ pub trait Plan: 'static + Sync + Downcast {
     /// tracing and releasing). A plan can implement this to
     /// use plan specific semantics to check if the object is sane.
     /// Return true if the object is considered valid by the plan.
-    fn sanity_check_object(&self, _object: ObjectReference) -> bool {
-        true
+    fn sanity_check_object(&self, object: ObjectReference) -> bool {
+        object.is_live()
     }
 }
 

@@ -434,6 +434,26 @@ pub fn verify_bzero(metadata_spec: &SideMetadataSpec, start: Address, size: usiz
 }
 
 #[cfg(feature = "extreme_assertions")]
+pub fn verify_bset(metadata_spec: &SideMetadataSpec, start: Address, size: usize) {
+    let sanity_map = &mut CONTENT_SANITY_MAP.write().unwrap();
+    let start = align_to_region_start(metadata_spec, start);
+    let end = align_to_region_start(metadata_spec, start + size);
+    match sanity_map.get_mut(metadata_spec) {
+        Some(spec_sanity_map) => {
+            let mut cursor = start;
+            let step: usize = 1 << metadata_spec.log_bytes_in_region;
+            while cursor < end {
+                spec_sanity_map.insert(cursor, 1);
+                cursor += step;
+            }
+        }
+        None => {
+            panic!("Invalid Metadata Spec!");
+        }
+    }
+}
+
+#[cfg(feature = "extreme_assertions")]
 use crate::util::metadata::metadata_val_traits::*;
 
 #[cfg(feature = "extreme_assertions")]

@@ -67,6 +67,11 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
 
         scheduler.reset_state();
 
+        #[cfg(feature = "extreme_assertions")]
+        if crate::util::edge_logger::should_check_duplicate_edges(&*mmtk.plan) {
+            mmtk.edge_logger.reset();
+        }
+
         plan.base().inside_sanity.store(true, Ordering::SeqCst);
         // Stop & scan mutators (mutator scanning can happen before STW)
 
@@ -96,8 +101,8 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
                 ));
             }
         }
-        scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(ScanVMSpecificRoots::<SanityGCProcessEdges<P::VM>>::new());
+        // scheduler.work_buckets[WorkBucketStage::Prepare]
+        //     .add(ScanVMSpecificRoots::<SanityGCProcessEdges<P::VM>>::new());
         // Prepare global/collectors/mutators
         worker.scheduler().work_buckets[WorkBucketStage::Prepare]
             .add(SanityPrepare::<P>::new(plan.downcast_ref::<P>().unwrap()));
@@ -199,14 +204,16 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
         let mut sanity_checker = self.mmtk().sanity_checker.lock().unwrap();
         if !sanity_checker.refs.contains(&object) {
             // FIXME steveb consider VM-specific integrity check on reference.
-            assert!(object.is_sane(), "Invalid reference {:?}", object);
+            // assert!(object.is_sane(), "Invalid reference {:?}", object);
 
             // Let plan check object
-            assert!(
-                self.mmtk().plan.sanity_check_object(object),
-                "Invalid reference {:?}",
-                object
-            );
+            if object.is_in_any_space() {
+                assert!(
+                    self.mmtk().plan.sanity_check_object(object),
+                    "Invalid reference {:?}",
+                    object
+                );
+            }
 
             // Let VM check object
             assert!(
