@@ -10,6 +10,8 @@ use crate::policy::immortalspace::ImmortalSpace;
 use crate::policy::vmspace::VMSpace;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::{PlanCreateSpaceArgs, Space};
+#[cfg(feature = "vm_space")]
+use crate::policy::vmspace::VMSpace;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(feature = "analysis")]
@@ -419,7 +421,7 @@ pub struct BasePlan<VM: VMBinding> {
     /// If VM space is present, it has some special interaction with the
     /// `memory_manager::is_mmtk_object` and the `memory_manager::is_in_mmtk_spaces` functions.
     ///
-    /// -   The `is_mmtk_object` funciton requires the alloc_bit side metadata to identify objects,
+    /// -   The `is_mmtk_object` funciton requires the valid object (VO) bit side metadata to identify objects,
     ///     but currently we do not require the boot image to provide it, so it will not work if the
     ///     address argument is in the VM space.
     ///
@@ -429,28 +431,6 @@ pub struct BasePlan<VM: VMBinding> {
     #[trace]
     pub vm_space: VMSpace<VM>,
 }
-
-// #[cfg(feature = "vm_space")]
-// pub fn create_vm_space<VM: VMBinding>(args: &mut CreateSpecificPlanArgs<VM>) -> ImmortalSpace<VM> {
-//     use crate::util::constants::LOG_BYTES_IN_MBYTE;
-//     let boot_segment_bytes = *args.global_args.options.vm_space_size;
-//     debug_assert!(boot_segment_bytes > 0);
-
-//     use crate::util::conversions::raw_align_up;
-//     use crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK;
-//     let boot_segment_mb = raw_align_up(boot_segment_bytes, BYTES_IN_CHUNK) >> LOG_BYTES_IN_MBYTE;
-
-//     let space = ImmortalSpace::new(args.get_space_args(
-//         "boot",
-//         false,
-//         VMRequest::fixed_size(boot_segment_mb),
-//     ));
-
-//     // The space is mapped externally by the VM. We need to update our mmapper to mark the range as mapped.
-//     space.ensure_mapped();
-
-//     space
-// }
 
 /// Args needed for creating any plan. This includes a set of contexts from MMTK or global. This
 /// is passed to each plan's constructor.

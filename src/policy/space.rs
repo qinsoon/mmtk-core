@@ -506,8 +506,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
                 top: _top,
             } => (_extent, _top),
             VMRequest::Fixed {
-                extent: _extent,
-                ..
+                extent: _extent, ..
             } => (_extent, false),
             _ => unreachable!(),
         };
@@ -539,13 +538,21 @@ impl<VM: VMBinding> CommonSpace<VM> {
         // FIXME
         rtn.descriptor = SpaceDescriptor::create_descriptor_from_heap_range(start, start + extent);
         // VM.memory.setHeapRange(index, start, start.plus(extent));
-        // We assume we have a fixed number of spaces, and in 64bits, we pre arrange the virtual address space for them.
-        // Any address after the last space is considered as in the last space, and this obviously causes some issues if we
-        // have an address that is beyond the last space. Normally this is not a problem for us. But when we have a VM space
-        // with a binding-defined address range, we could deal with arbitrary VM space location. And this becomes a problem.
-        // So for VM space, we do not initialize its VM map to avoid this problem. Ideally, we should fix our VM map implementation.
-        if !args.vm_space {
-            args.plan_args.vm_map.insert(start, extent, rtn.descriptor);
+
+        // We only initialize our vm map if the range of the space is in our available heap range. For normally spaces,
+        // they are definitely in our heap range. But for VM space, a runtime could give us an arbitrary range. We only
+        // insert into our vm map if the range overlaps with our heap.
+        {
+            use crate::util::heap::layout;
+            let overlap =
+                Address::range_intersection(&(start..start + extent), &layout::available_range());
+            if !overlap.is_empty() {
+                args.plan_args.vm_map.insert(
+                    overlap.start,
+                    overlap.end - overlap.start,
+                    rtn.descriptor,
+                );
+            }
         }
 
         // For contiguous space, we know its address range so we reserve metadata memory for its range.
