@@ -10,8 +10,6 @@ use crate::policy::immortalspace::ImmortalSpace;
 use crate::policy::vmspace::VMSpace;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::{PlanCreateSpaceArgs, Space};
-#[cfg(feature = "vm_space")]
-use crate::policy::vmspace::VMSpace;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 #[cfg(feature = "analysis")]

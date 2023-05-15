@@ -456,11 +456,6 @@ pub fn start_worker<VM: VMBinding>(
     worker.run(tls, mmtk);
 }
 
-#[cfg(feature = "vm_space")]
-pub fn lazy_init_vm_space<VM: VMBinding>(mmtk: &'static mut MMTK<VM>, start: Address, size: usize) {
-    mmtk.plan.base_mut().vm_space.lazy_initialize(start, size);
-}
-
 /// Initialize the scheduler and GC workers that are required for doing garbage collections.
 /// This is a mandatory call for a VM during its boot process once its thread system
 /// is ready. This should only be called once. This call will invoke Collection::spawn_gc_thread()
