@@ -36,9 +36,9 @@ pub use self::scanning::RootsWorkFactory;
 pub use self::scanning::Scanning;
 
 /// Default min alignment 4 bytes
-const DEFAULT_LOG_MIN_ALIGNMENT: usize = 2;
+const DEFAULT_LOG_MIN_ALIGNMENT: usize = crate::util::constants::LOG_BYTES_IN_INT as usize;
 /// Default max alignment 8 bytes
-const DEFAULT_LOG_MAX_ALIGNMENT: usize = 3;
+const DEFAULT_LOG_MAX_ALIGNMENT: usize = crate::util::constants::LOG_BYTES_IN_LONG as usize;
 
 /// The `VMBinding` trait associates with each trait, and provides VM-specific constants.
 pub trait VMBinding
