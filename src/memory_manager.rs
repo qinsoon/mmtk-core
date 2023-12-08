@@ -233,7 +233,7 @@ pub fn object_reference_write<VM: VMBinding>(
     slot: VM::VMEdge,
     target: ObjectReference,
 ) {
-    mutator.barrier().object_reference_write(src, slot, target);
+    mutator.barrier().object_reference_write(src, &slot, target);
 }
 
 /// The write barrier by MMTk. This is a *pre* write barrier, which we expect a binding to call
@@ -259,7 +259,7 @@ pub fn object_reference_write_pre<VM: VMBinding>(
 ) {
     mutator
         .barrier()
-        .object_reference_write_pre(src, slot, target);
+        .object_reference_write_pre(src, &slot, target);
 }
 
 /// The write barrier by MMTk. This is a *post* write barrier, which we expect a binding to call
@@ -285,7 +285,7 @@ pub fn object_reference_write_post<VM: VMBinding>(
 ) {
     mutator
         .barrier()
-        .object_reference_write_post(src, slot, target);
+        .object_reference_write_post(src, &slot, target);
 }
 
 /// The *subsuming* memory region copy barrier by MMTk.
@@ -334,7 +334,7 @@ pub fn memory_region_copy_pre<VM: VMBinding>(
     dst: VM::VMMemorySlice,
 ) {
     debug_assert_eq!(src.bytes(), dst.bytes());
-    mutator.barrier().memory_region_copy_pre(src, dst);
+    mutator.barrier().memory_region_copy_pre(&src, &dst);
 }
 
 /// The *generic* memory region copy *post* barrier by MMTk, which we expect a binding to call
@@ -359,7 +359,7 @@ pub fn memory_region_copy_post<VM: VMBinding>(
     dst: VM::VMMemorySlice,
 ) {
     debug_assert_eq!(src.bytes(), dst.bytes());
-    mutator.barrier().memory_region_copy_post(src, dst);
+    mutator.barrier().memory_region_copy_post(&src, &dst);
 }
 
 /// Return an AllocatorSelector for the given allocation semantic. This method is provided

@@ -94,7 +94,7 @@ pub trait ObjectTracerContext<VM: VMBinding>: Clone + Send + 'static {
 ///     it needs `Send` to be sent between threads.  `'static` means it must not have
 ///     references to variables with limited lifetime (such as local variables), because
 ///     it needs to be moved between threads.
-pub trait RootsWorkFactory<ES: Edge>: Clone + Send + 'static {
+pub trait RootsWorkFactory<ES: Edge>: Send + 'static {
     /// Create work packets to handle root edges.
     ///
     /// The work packet may update the edges.

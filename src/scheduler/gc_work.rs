@@ -670,9 +670,8 @@ pub trait ProcessEdgesWork:
     /// Process all the edges in the work packet.
     fn process_edges(&mut self) {
         probe!(mmtk, process_edges, self.edges.len(), self.is_roots());
-        for i in 0..self.edges.len() {
-            self.process_edge(self.edges[i])
-        }
+        let edges: Vec<_> = self.edges.drain(..).collect();
+        edges.into_iter().for_each(|slot| self.process_edge(slot));
     }
 }
 

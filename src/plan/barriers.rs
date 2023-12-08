@@ -48,19 +48,19 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn object_reference_write(
         &mut self,
         src: ObjectReference,
-        slot: VM::VMEdge,
+        slot: &VM::VMEdge,
         target: ObjectReference,
     ) {
-        self.object_reference_write_pre(src, slot, target);
+        self.object_reference_write_pre(src, &slot, target);
         slot.store(target);
-        self.object_reference_write_post(src, slot, target);
+        self.object_reference_write_post(src, &slot, target);
     }
 
     /// Full pre-barrier for object reference write
     fn object_reference_write_pre(
         &mut self,
         _src: ObjectReference,
-        _slot: VM::VMEdge,
+        _slot: &VM::VMEdge,
         _target: ObjectReference,
     ) {
     }
@@ -69,7 +69,7 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn object_reference_write_post(
         &mut self,
         _src: ObjectReference,
-        _slot: VM::VMEdge,
+        _slot: &VM::VMEdge,
         _target: ObjectReference,
     ) {
     }
@@ -79,23 +79,23 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn object_reference_write_slow(
         &mut self,
         _src: ObjectReference,
-        _slot: VM::VMEdge,
+        _slot: &VM::VMEdge,
         _target: ObjectReference,
     ) {
     }
 
     /// Subsuming barrier for array copy
     fn memory_region_copy(&mut self, src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
-        self.memory_region_copy_pre(src.clone(), dst.clone());
+        self.memory_region_copy_pre(&src, &dst);
         VM::VMMemorySlice::copy(&src, &dst);
-        self.memory_region_copy_post(src, dst);
+        self.memory_region_copy_post(&src, &dst);
     }
 
     /// Full pre-barrier for array copy
-    fn memory_region_copy_pre(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
+    fn memory_region_copy_pre(&mut self, _src: &VM::VMMemorySlice, _dst: &VM::VMMemorySlice) {}
 
     /// Full post-barrier for array copy
-    fn memory_region_copy_post(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
+    fn memory_region_copy_post(&mut self, _src: &VM::VMMemorySlice, _dst: &VM::VMMemorySlice) {}
 
     /// A pre-barrier indicating that some fields of the object will probably be modified soon.
     /// Specifically, the caller should ensure that:
@@ -144,15 +144,15 @@ pub trait BarrierSemantics: 'static + Send {
     fn object_reference_write_slow(
         &mut self,
         src: ObjectReference,
-        slot: <Self::VM as VMBinding>::VMEdge,
+        slot: &<Self::VM as VMBinding>::VMEdge,
         target: ObjectReference,
     );
 
     /// Slow-path call for mempry slice copy operations. For example, array-copy operations.
     fn memory_region_copy_slow(
         &mut self,
-        src: <Self::VM as VMBinding>::VMMemorySlice,
-        dst: <Self::VM as VMBinding>::VMMemorySlice,
+        src: &<Self::VM as VMBinding>::VMMemorySlice,
+        dst: &<Self::VM as VMBinding>::VMMemorySlice,
     );
 
     /// Object will probably be modified
@@ -214,7 +214,7 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
     fn object_reference_write_post(
         &mut self,
         src: ObjectReference,
-        slot: <S::VM as VMBinding>::VMEdge,
+        slot: &<S::VM as VMBinding>::VMEdge,
         target: ObjectReference,
     ) {
         if self.object_is_unlogged(src) {
@@ -225,7 +225,7 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
     fn object_reference_write_slow(
         &mut self,
         src: ObjectReference,
-        slot: <S::VM as VMBinding>::VMEdge,
+        slot: &<S::VM as VMBinding>::VMEdge,
         target: ObjectReference,
     ) {
         if self.log_object(src) {
@@ -236,8 +236,8 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
 
     fn memory_region_copy_post(
         &mut self,
-        src: <S::VM as VMBinding>::VMMemorySlice,
-        dst: <S::VM as VMBinding>::VMMemorySlice,
+        src: &<S::VM as VMBinding>::VMMemorySlice,
+        dst: &<S::VM as VMBinding>::VMMemorySlice,
     ) {
         self.semantics.memory_region_copy_slow(src, dst);
     }

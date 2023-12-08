@@ -39,7 +39,7 @@ use crate::util::{Address, ObjectReference};
 /// Note: this trait only concerns the representation (i.e. the shape) of the edge, not its
 /// semantics, such as whether it holds strong or weak references.  If a VM holds a weak reference
 /// in a word as a pointer, it can also use `SimpleEdge` for weak reference fields.
-pub trait Edge: Copy + Send + Debug + PartialEq + Eq + Hash {
+pub trait Edge: Send + Debug + PartialEq + Eq + Hash {
     /// Load object reference from the edge.
     fn load(&self) -> ObjectReference;
 
@@ -125,7 +125,7 @@ fn a_simple_edge_should_have_the_same_size_as_a_pointer() {
 }
 
 /// A abstract memory slice represents a piece of **heap** memory.
-pub trait MemorySlice: Send + Debug + PartialEq + Eq + Clone + Hash {
+pub trait MemorySlice: Send + Debug + PartialEq + Eq + Hash {
     /// The associate type to define how to access edges from a memory slice.
     type Edge: Edge;
     /// The associate type to define how to iterate edges in a memory slice.
@@ -143,6 +143,8 @@ pub trait MemorySlice: Send + Debug + PartialEq + Eq + Clone + Hash {
     fn bytes(&self) -> usize;
     /// Memory copy support
     fn copy(src: &Self, tgt: &Self);
+    /// Make a clone of the MemorySlice that refers to the same memory slice.
+    fn clone_slice(&self) -> Self;
 }
 
 /// Iterate edges within `Range<Address>`.
@@ -203,6 +205,10 @@ impl MemorySlice for Range<Address> {
             std::ptr::copy(src, tgt, words)
         }
     }
+
+    fn clone_slice(&self) -> Self {
+        self.clone()
+    }
 }
 
 /// Memory slice type with empty implementations.
@@ -242,6 +248,10 @@ impl<E: Edge> MemorySlice for UnimplementedMemorySlice<E> {
     }
 
     fn copy(_src: &Self, _tgt: &Self) {
+        unimplemented!()
+    }
+
+    fn clone_slice(&self) -> Self {
         unimplemented!()
     }
 }
