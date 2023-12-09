@@ -1,7 +1,9 @@
+use crate::scheduler::gc_work::SFTProcessEdges;
 use crate::vm::VMBinding;
 use crate::vm::edge_shape::*;
 use crate::vm::prelude::*;
 use crate::vm::GCThreadContext;
+use crate::scheduler::gc_work::ProcessEdgesWorkTracerContext;
 
 use super::mock_method::*;
 
@@ -22,17 +24,13 @@ macro_rules! lifetime {
 }
 
 macro_rules! mock {
-    ($fn: ident()) => {
-        MOCK_VM_INSTANCE.lock().unwrap().$fn.call(())
+    ($fn: ident($($arg:expr),*)) => {
+        MOCK_VM_INSTANCE.lock().unwrap().$fn.call(($($arg),*))
     };
-    ($fn: ident($arg: expr)) => {
-        MOCK_VM_INSTANCE.lock().unwrap().$fn.call(($arg))
-    };
-    ($fn: ident($arg1: expr, $arg2: expr)) => {
-        MOCK_VM_INSTANCE.lock().unwrap().$fn.call(($arg1, $arg2))
-    };
-    ($fn: ident($arg1: expr, $arg2: expr, $arg3: expr)) => {
-        MOCK_VM_INSTANCE.lock().unwrap().$fn.call(($arg1, $arg2, $arg3))
+}
+macro_rules! mock_any {
+    ($fn: ident($($arg:expr),*)) => {
+        *MOCK_VM_INSTANCE.lock().unwrap().$fn.call_any(Box::new(($($arg),*))).downcast().unwrap()
     };
 }
 
@@ -80,8 +78,8 @@ pub struct MockVM {
     notify_initial_thread_scan_complete: MockMethod<(bool, VMWorkerThread), ()>,
     supports_return_barrier: MockMethod<(), bool>,
     prepare_for_roots_re_scanning: MockMethod<(), ()>,
-    // process_weak_refs: MockMethod<(&'static mut GCWorker<Self>, Box<dyn ObjectTracerContext<Self>>), bool>,
-    // forward_weak_refs: MockMethod<(&'static mut GCWorker<Self>, Box<dyn ObjectTracerContext<Self>>), ()>,
+    process_weak_refs: Box<dyn MockAny>,
+    forward_weak_refs: Box<dyn MockAny>,
 }
 
 impl Default for MockVM {
@@ -129,9 +127,14 @@ impl Default for MockVM {
             notify_initial_thread_scan_complete: MockMethod::new_unimplemented(),
             supports_return_barrier: MockMethod::new_unimplemented(),
             prepare_for_roots_re_scanning: MockMethod::new_unimplemented(),
+            process_weak_refs: Box::new(MockMethod::<(&'static mut GCWorker<Self>, ProcessEdgesWorkTracerContext<SFTProcessEdges<MockVM>>), bool>::new_unimplemented()),
+            forward_weak_refs: Box::new(MockMethod::<(&'static mut GCWorker<Self>, ProcessEdgesWorkTracerContext<SFTProcessEdges<MockVM>>), ()>::new_default()),
         }
     }
 }
+
+unsafe impl Sync for MockVM {}
+unsafe impl Send for MockVM {}
 
 impl VMBinding for MockVM {
     type VMEdge = Address;
@@ -317,5 +320,13 @@ impl VMBinding for MockVM {
     }
     fn prepare_for_roots_re_scanning() {
         mock!(prepare_for_roots_re_scanning())
+    }
+    fn process_weak_refs(worker: &mut GCWorker<Self>, tracer_context: impl ObjectTracerContext<Self>) -> bool {
+        let worker: &'static mut GCWorker<Self> = lifetime!(worker);
+        mock_any!(process_weak_refs(worker, tracer_context))
+    }
+    fn forward_weak_refs(worker: &mut GCWorker<Self>, tracer_context: impl ObjectTracerContext<Self>) {
+        let worker: &'static mut GCWorker<Self> = lifetime!(worker);
+        mock_any!(forward_weak_refs(worker, tracer_context))
     }
 }

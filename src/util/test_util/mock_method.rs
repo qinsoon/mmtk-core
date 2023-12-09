@@ -1,5 +1,19 @@
 use std::marker::PhantomData;
 use std::collections::HashMap;
+use std::any::Any;
+
+pub trait MockAny {
+    fn call_any(&mut self, args: Box<dyn Any>) -> Box<dyn Any>;
+}
+
+impl<I: 'static, R: 'static> MockAny for MockMethod<I, R> {
+    fn call_any(&mut self, args: Box<dyn Any>) -> Box<dyn Any> {
+        let typed_args: Box<I> = args.downcast().unwrap();
+        let typed_args_inner: I = *typed_args;
+        let typed_ret = self.call(typed_args_inner);
+        Box::new(typed_ret)
+    }
+}
 
 pub struct MockMethod<I, R> {
     imp: MockImpl<I, R>,
