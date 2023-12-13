@@ -25,6 +25,7 @@ use crate::util::{Address, ObjectReference};
 use crate::vm::edge_shape::MemorySlice;
 use crate::vm::VMBinding;
 use std::sync::atomic::Ordering;
+
 /// Initialize an MMTk instance. A VM should call this method after creating an [`crate::MMTK`]
 /// instance but before using any of the methods provided in MMTk (except `process()` and `process_bulk()`).
 ///

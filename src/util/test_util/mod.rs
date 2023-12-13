@@ -8,6 +8,9 @@ use std::time::Duration;
 
 mod mock_method;
 mod mock_vm;
+pub mod fixtures;
+#[cfg(test)]
+mod mock_tests;
 
 // Sometimes we need to mmap for tests. We want to ensure that the mmapped addresses do not overlap
 // for different tests, so we organize them here.
