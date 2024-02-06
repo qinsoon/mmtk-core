@@ -241,6 +241,7 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         queue: &mut Q,
         object: ObjectReference,
     ) -> ObjectReference {
+        probe!(mmtk, trace_object, object.value());
         debug_assert!(!object.is_null());
         debug_assert!(
             self.in_space(object),

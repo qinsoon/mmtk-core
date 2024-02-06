@@ -18,6 +18,8 @@ pub struct GlobalState {
     pub(crate) trigger_gc_when_heap_is_full: AtomicBool,
     /// The current GC status.
     pub(crate) gc_status: Mutex<GcStatus>,
+    /// Counting the number of GCs (used for debugging)
+    pub(crate) gc_count: AtomicUsize,
     /// Is the current GC an emergency collection? Emergency means we may run out of memory soon, and we should
     /// attempt to collect as much as we can.
     pub(crate) emergency_collection: AtomicBool,
@@ -204,6 +206,7 @@ impl Default for GlobalState {
             initialized: AtomicBool::new(false),
             trigger_gc_when_heap_is_full: AtomicBool::new(true),
             gc_status: Mutex::new(GcStatus::NotInGC),
+            gc_count: AtomicUsize::new(0),
             stacks_prepared: AtomicBool::new(false),
             emergency_collection: AtomicBool::new(false),
             user_triggered_collection: AtomicBool::new(false),

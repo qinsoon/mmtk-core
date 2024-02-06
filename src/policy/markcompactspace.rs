@@ -224,6 +224,7 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         queue: &mut Q,
         object: ObjectReference,
     ) -> ObjectReference {
+        probe!(mmtk, trace_object, object.value());
         debug_assert!(
             crate::util::metadata::vo_bit::is_vo_bit_set::<VM>(object),
             "{:x}: VO bit not set",

@@ -189,6 +189,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         queue: &mut Q,
         object: ObjectReference,
     ) -> ObjectReference {
+        probe!(mmtk, trace_object, object.value());
         debug_assert!(!object.is_null());
         #[cfg(feature = "vo_bit")]
         debug_assert!(

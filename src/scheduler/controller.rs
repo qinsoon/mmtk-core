@@ -80,9 +80,12 @@ impl<VM: VMBinding> GCController<VM> {
 
     /// A wrapper method for [`do_gc_until_completion`](GCController::do_gc_until_completion) to insert USDT tracepoints.
     fn do_gc_until_completion_traced(&mut self) {
-        probe!(mmtk, gc_start);
+        use std::sync::atomic::Ordering;
+        let cur_gc_count = self.mmtk.state.gc_count.load(Ordering::Relaxed);
+        probe!(mmtk, gc_start, cur_gc_count);
         self.do_gc_until_completion();
-        probe!(mmtk, gc_end);
+        probe!(mmtk, gc_end, cur_gc_count);
+        self.mmtk.state.gc_count.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Coordinate workers to perform GC in response to a GC request.

@@ -203,6 +203,7 @@ impl<VM: VMBinding> CopySpace<VM> {
         semantics: Option<CopySemantics>,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
+        probe!(mmtk, trace_object, object.value());
         trace!("copyspace.trace_object(, {:?}, {:?})", object, semantics,);
         debug_assert!(!object.is_null());
 

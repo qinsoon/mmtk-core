@@ -256,6 +256,7 @@ impl<VM: VMBinding> VMSpace<VM> {
         queue: &mut Q,
         object: ObjectReference,
     ) -> ObjectReference {
+        probe!(mmtk, trace_object, object.value());
         #[cfg(feature = "vo_bit")]
         debug_assert!(
             crate::util::metadata::vo_bit::is_vo_bit_set::<VM>(object),

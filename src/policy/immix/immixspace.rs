@@ -544,6 +544,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         queue: &mut impl ObjectQueue,
         object: ObjectReference,
     ) -> ObjectReference {
+        probe!(mmtk, trace_object, object.value());
         #[cfg(feature = "vo_bit")]
         vo_bit::helper::on_trace_object::<VM>(object);
 
@@ -578,6 +579,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         worker: &mut GCWorker<VM>,
         nursery_collection: bool,
     ) -> ObjectReference {
+        probe!(mmtk, trace_object, object.value());
         let copy_context = worker.get_copy_context_mut();
         debug_assert!(!super::BLOCK_ONLY);
 

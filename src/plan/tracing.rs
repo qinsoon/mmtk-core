@@ -84,6 +84,7 @@ pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
     buffer: VectorQueue<EdgeOf<E>>,
     pub(crate) worker: &'a mut GCWorker<E::VM>,
     bucket: WorkBucketStage,
+    parent_object: Option<ObjectReference>,
 }
 
 impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
@@ -97,6 +98,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
             buffer: VectorQueue::new(),
             worker,
             bucket,
+            parent_object: None
         }
     }
 
@@ -112,16 +114,21 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
 }
 
 impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
+    fn set_parent(&mut self, parent: ObjectReference) {
+        self.parent_object = Some(parent);
+    }
+
     fn visit_edge(&mut self, slot: EdgeOf<E>) {
+        use crate::vm::edge_shape::Edge;
         #[cfg(debug_assertions)]
         {
-            use crate::vm::edge_shape::Edge;
             trace!(
                 "(ObjectsClosure) Visit edge {:?} (pointing to {})",
                 slot,
                 slot.load()
             );
         }
+        probe_lazy!(mmtk, follow_edge, { self.parent_object.unwrap().value() }, { slot.load().value() });
         self.buffer.push(slot);
         if self.buffer.is_full() {
             self.flush();

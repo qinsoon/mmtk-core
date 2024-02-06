@@ -400,6 +400,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
         queue: &mut Q,
         object: ObjectReference,
     ) -> ObjectReference {
+        probe!(mmtk, trace_object, object.value());
         debug_assert!(!object.is_null());
 
         assert!(

@@ -7,12 +7,14 @@ use crate::vm::VMBinding;
 
 /// Callback trait of scanning functions that report edges.
 pub trait EdgeVisitor<ES: Edge> {
+    fn set_parent(&mut self, parent: ObjectReference);
     /// Call this function for each edge.
     fn visit_edge(&mut self, edge: ES);
 }
 
 /// This lets us use closures as EdgeVisitor.
 impl<ES: Edge, F: FnMut(ES)> EdgeVisitor<ES> for F {
+    fn set_parent(&mut self, _parent: ObjectReference) {}
     fn visit_edge(&mut self, edge: ES) {
         #[cfg(debug_assertions)]
         trace!(
@@ -20,12 +22,14 @@ impl<ES: Edge, F: FnMut(ES)> EdgeVisitor<ES> for F {
             edge,
             edge.load()
         );
+        probe_lazy!(mmtk, follow_edge, 0, { edge.load().value() });
         self(edge)
     }
 }
 
 /// Callback trait of scanning functions that directly trace through edges.
 pub trait ObjectTracer {
+    fn set_parent(&mut self, parent: ObjectReference);
     /// Call this function to trace through an object graph edge which points to `object`.
     /// `object` must point to a valid object, and cannot be `ObjectReference::NULL`.
     ///
@@ -39,7 +43,9 @@ pub trait ObjectTracer {
 
 /// This lets us use closures as ObjectTracer.
 impl<F: FnMut(ObjectReference) -> ObjectReference> ObjectTracer for F {
+    fn set_parent(&mut self, _parent: ObjectReference) {}
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        probe!(mmtk, follow_edge, 0, object.value());
         self(object)
     }
 }

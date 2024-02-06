@@ -268,12 +268,17 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
 pub(crate) struct ProcessEdgesWorkTracer<E: ProcessEdgesWork> {
     process_edges_work: E,
     stage: WorkBucketStage,
+    parent_object: Option<ObjectReference>,
 }
 
 impl<E: ProcessEdgesWork> ObjectTracer for ProcessEdgesWorkTracer<E> {
+    fn set_parent(&mut self, parent: ObjectReference) {
+        self.parent_object = Some(parent);
+    }
     /// Forward the `trace_object` call to the underlying `ProcessEdgesWork`,
     /// and flush as soon as the underlying buffer of `process_edges_work` is full.
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        probe_lazy!(mmtk, follow_edge, { self.parent_object.unwrap().value() }, object.value());
         debug_assert!(!object.is_null());
         let result = self.process_edges_work.trace_object(object);
         self.flush_if_full();
@@ -337,6 +342,7 @@ impl<E: ProcessEdgesWork> ObjectTracerContext<E::VM> for ProcessEdgesWorkTracerC
         let mut tracer = ProcessEdgesWorkTracer {
             process_edges_work,
             stage: self.stage,
+            parent_object: None,
         };
 
         // The caller can use the tracer here.
@@ -849,12 +855,14 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
                 // For any object we need to scan, we count its liv bytes
                 #[cfg(feature = "count_live_bytes_in_gc")]
                 closure
-                    .worker
-                    .shared
-                    .increase_live_bytes(VM::VMObjectModel::get_current_size(object));
+                .worker
+                .shared
+                .increase_live_bytes(VM::VMObjectModel::get_current_size(object));
 
-                if <VM as VMBinding>::VMScanning::support_edge_enqueuing(tls, object) {
+            if <VM as VMBinding>::VMScanning::support_edge_enqueuing(tls, object) {
                     trace!("Scan object (edge) {}", object);
+                    probe!(mmtk, scan_object, object.value());
+                    closure.set_parent(object);
                     // If an object supports edge-enqueuing, we enqueue its edges.
                     <VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure);
                     self.post_scan_object(object);
@@ -881,6 +889,8 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
                 // Scan objects and trace their edges at the same time.
                 for object in scan_later.iter().copied() {
                     trace!("Scan object (node) {}", object);
+                    probe!(mmtk, scan_object, object.value());
+                    object_tracer.set_parent(object);
                     <VM as VMBinding>::VMScanning::scan_object_and_trace_edges(
                         tls,
                         object,
