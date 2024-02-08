@@ -21,6 +21,7 @@ pub mod breakpoint {
 
     #[no_mangle]
     pub fn follow_edge(from_object: usize, to_object: usize) {
-
+        probe!(mmtk, follow_edge, from_object, to_object);
+        trace!("{:x}->{:x}", from_object, to_object);
     }
 }

@@ -278,7 +278,7 @@ impl<E: ProcessEdgesWork> ObjectTracer for ProcessEdgesWorkTracer<E> {
     /// Forward the `trace_object` call to the underlying `ProcessEdgesWork`,
     /// and flush as soon as the underlying buffer of `process_edges_work` is full.
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        probe_lazy!(mmtk, follow_edge, { self.parent_object.unwrap().value() }, object.value());
+        crate::util::debug_util::breakpoint::follow_edge(self.parent_object.map_or(0, |p| p.value()), object.value());
         debug_assert!(!object.is_null());
         let result = self.process_edges_work.trace_object(object);
         self.flush_if_full();
@@ -525,6 +525,11 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
             for edge in &edges {
                 // log edge, panic if already logged
                 mmtk.edge_logger.log_edge(*edge);
+            }
+        }
+        if roots {
+            for edge in &edges {
+                probe!(mmtk, add_root, edge.load().value());
             }
         }
         Self {

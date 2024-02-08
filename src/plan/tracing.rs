@@ -120,15 +120,7 @@ impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
 
     fn visit_edge(&mut self, slot: EdgeOf<E>) {
         use crate::vm::edge_shape::Edge;
-        #[cfg(debug_assertions)]
-        {
-            trace!(
-                "(ObjectsClosure) Visit edge {:?} (pointing to {})",
-                slot,
-                slot.load()
-            );
-        }
-        probe_lazy!(mmtk, follow_edge, { self.parent_object.unwrap().value() }, { slot.load().value() });
+        crate::util::debug_util::breakpoint::follow_edge(self.parent_object.map_or(0, |p| p.value()), slot.load().value());
         self.buffer.push(slot);
         if self.buffer.is_full() {
             self.flush();

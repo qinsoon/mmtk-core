@@ -22,7 +22,7 @@ impl<ES: Edge, F: FnMut(ES)> EdgeVisitor<ES> for F {
             edge,
             edge.load()
         );
-        probe_lazy!(mmtk, follow_edge, 0, { edge.load().value() });
+        crate::util::debug_util::breakpoint::follow_edge(0, edge.load().value());
         self(edge)
     }
 }
@@ -45,7 +45,7 @@ pub trait ObjectTracer {
 impl<F: FnMut(ObjectReference) -> ObjectReference> ObjectTracer for F {
     fn set_parent(&mut self, _parent: ObjectReference) {}
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        probe!(mmtk, follow_edge, 0, object.value());
+        crate::util::debug_util::breakpoint::follow_edge(0, object.value());
         self(object)
     }
 }
