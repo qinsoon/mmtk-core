@@ -154,3 +154,122 @@ impl<T: Diffable> LongCounter<T> {
 }
 
 pub type Timer = LongCounter<MonotoneNanoTime>;
+
+#[cfg(test)]
+mod tests {
+    use crate::util::statistics::stats::SharedStats;
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
+
+    // Everytime we stop, count increment.
+    struct IncrementCounter(usize);
+    impl Diffable for IncrementCounter {
+        type Val = usize;
+        fn start(&mut self) {}
+        fn stop(&mut self) { self.0 += 1; }
+        fn current_value(&mut self) -> usize { self.0 }
+        fn diff(current: &usize, earlier: &usize) -> u64 {
+            (current - earlier) as u64
+        }
+        fn print_diff(val: u64) {
+            print!("{:}", val);
+        }
+    }
+
+    #[test]
+    fn test_single_phase() {
+        let shared = Arc::new(SharedStats::new());
+        let mut counter = LongCounter::<IncrementCounter>::new("test_counter".to_string(), shared.clone(), true, false, IncrementCounter(0));
+
+        // start gathering stats
+        shared.set_gathering_stats(true);
+
+        // Start. Reading current value 0. No recording yet.
+        counter.start();
+        assert_eq!(counter.start_value, Some(0));
+        assert_eq!(counter.count[shared.get_phase()], 0);
+        assert_eq!(counter.total_count, 0);
+
+        // Stop. Reading current value 1. Record diff 1.
+        counter.stop();
+        assert_eq!(counter.diffable.current_value(), 1);
+        assert_eq!(counter.count[shared.get_phase()], 1);
+        assert_eq!(counter.total_count, 1);
+
+        // Start and stop again.
+        counter.start();
+        counter.stop();
+        assert_eq!(counter.count[shared.get_phase()], 2);
+        assert_eq!(counter.total_count, 2);
+
+        assert_eq!(counter.get_total(None), 2);
+        assert_eq!(counter.get_total(Some(true)), 2);
+        assert_eq!(counter.get_total(Some(false)), 0);
+    }
+
+    #[test]
+    fn test_two_phases() {
+        let shared = Arc::new(SharedStats::new());
+        let mut counter = LongCounter::<IncrementCounter>::new("test_counter".to_string(), shared.clone(), true, false, IncrementCounter(0));
+
+        // start gathering stats
+        shared.set_gathering_stats(true);
+
+        // Phase 0
+
+        // Start. Reading current value 0. No recording yet.
+        counter.start();
+        assert_eq!(counter.start_value, Some(0));
+        assert_eq!(counter.count[shared.get_phase()], 0);
+        assert_eq!(counter.total_count, 0);
+
+        // Stop. Reading current value 1. Record diff 1.
+        counter.stop();
+        assert_eq!(counter.diffable.current_value(), 1);
+        assert_eq!(counter.count[shared.get_phase()], 1);
+        assert_eq!(counter.total_count, 1);
+
+        // Phase 1
+        shared.increment_phase();
+
+        // Start and stop again.
+        counter.start();
+        counter.stop();
+        assert_eq!(counter.count[shared.get_phase()], 1);
+        assert_eq!(counter.total_count, 2);
+
+        assert_eq!(counter.get_total(None), 2);
+        assert_eq!(counter.get_total(Some(true)), 1);
+        assert_eq!(counter.get_total(Some(false)), 1);
+    }
+
+    #[test]
+    fn test_exceeding_max_phases() {
+        use crate::util::statistics::stats::MAX_PHASES;
+        let shared = Arc::new(SharedStats::new());
+        let mut counter = LongCounter::<IncrementCounter>::new("test_counter".to_string(), shared.clone(), true, false, IncrementCounter(0));
+
+        // start gathering stats
+        shared.set_gathering_stats(true);
+
+        // Reach max phases
+        for _ in 0..MAX_PHASES {
+            counter.start();
+            counter.stop();
+            shared.increment_phase();
+        }
+
+        assert_eq!(counter.get_total(None), MAX_PHASES as u64);
+
+        // Do 10 more phases
+        let more_phases = 10;
+        for _ in 0..more_phases {
+            counter.start();
+            counter.stop();
+            shared.increment_phase();
+        }
+
+        assert_eq!(counter.get_total(None), MAX_PHASES as u64 + more_phases);
+    }
+}

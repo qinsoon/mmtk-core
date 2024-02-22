@@ -6,6 +6,8 @@ mod long_counter;
 mod perf_event;
 mod size_counter;
 
+mod array;
+
 pub use self::event_counter::EventCounter;
 pub use self::long_counter::{LongCounter, Timer};
 #[cfg(feature = "perf_counter")]

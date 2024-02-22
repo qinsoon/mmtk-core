@@ -23,7 +23,14 @@ pub struct SharedStats {
 }
 
 impl SharedStats {
-    fn increment_phase(&self) {
+    pub(super) fn new() -> Self {
+        Self {
+            phase: AtomicUsize::new(0),
+            gathering_stats: AtomicBool::new(false),
+        }
+    }
+
+    pub(super) fn increment_phase(&self) {
         self.phase.fetch_add(1, Ordering::SeqCst);
     }
 
@@ -35,7 +42,7 @@ impl SharedStats {
         self.gathering_stats.load(Ordering::SeqCst)
     }
 
-    fn set_gathering_stats(&self, val: bool) {
+    pub(super) fn set_gathering_stats(&self, val: bool) {
         self.gathering_stats.store(val, Ordering::SeqCst);
     }
 }
@@ -68,10 +75,7 @@ impl Stats {
             perfmon.initialize().expect("Perfmon failed to initialize");
             perfmon
         };
-        let shared = Arc::new(SharedStats {
-            phase: AtomicUsize::new(0),
-            gathering_stats: AtomicBool::new(false),
-        });
+        let shared = Arc::new(SharedStats::new());
         let mut counters: Vec<Arc<Mutex<dyn Counter + Send>>> = vec![];
         // We always have a time counter enabled
         let t = Arc::new(Mutex::new(LongCounter::new(
