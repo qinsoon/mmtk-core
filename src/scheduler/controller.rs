@@ -60,7 +60,7 @@ impl<VM: VMBinding> GCController<VM> {
 
     /// Find more work for workers to do.  Return true if more work is available.
     fn find_more_work_for_workers(&mut self) -> bool {
-        if self.scheduler.worker_group.has_designated_work() {
+        if self.scheduler.worker_group.as_ref().as_ref().unwrap().has_designated_work() {
             return true;
         }
 
@@ -121,7 +121,7 @@ impl<VM: VMBinding> GCController<VM> {
 
         // All GC workers must have parked by now.
         debug_assert!(self.scheduler.worker_monitor.debug_is_sleeping());
-        debug_assert!(!self.scheduler.worker_group.has_designated_work());
+        debug_assert!(!self.scheduler.worker_group.as_ref().as_ref().unwrap().has_designated_work());
         debug_assert!(self.scheduler.all_buckets_empty());
 
         // Deactivate all work buckets to prepare for the next GC.

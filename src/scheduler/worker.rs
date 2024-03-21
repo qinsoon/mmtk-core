@@ -406,7 +406,7 @@ pub(crate) struct WorkerGroup<VM: VMBinding> {
 
 impl<VM: VMBinding> WorkerGroup<VM> {
     /// Create a WorkerGroup
-    pub fn new(num_workers: usize) -> Arc<Self> {
+    pub fn new(num_workers: usize) -> Self {
         let unspawned_local_work_queues = (0..num_workers)
             .map(|_| deque::Worker::new_fifo())
             .collect::<Vec<_>>();
@@ -419,10 +419,10 @@ impl<VM: VMBinding> WorkerGroup<VM> {
             })
             .collect::<Vec<_>>();
 
-        Arc::new(Self {
+        Self {
             workers_shared,
             unspawned_local_work_queues: Mutex::new(unspawned_local_work_queues),
-        })
+        }
     }
 
     /// Spawn all the worker threads

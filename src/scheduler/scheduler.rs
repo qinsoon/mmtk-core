@@ -17,7 +17,7 @@ pub struct GCWorkScheduler<VM: VMBinding> {
     /// Work buckets
     pub work_buckets: EnumMap<WorkBucketStage, WorkBucket<VM>>,
     /// Workers
-    pub(crate) worker_group: Arc<WorkerGroup<VM>>,
+    pub(crate) worker_group: Arc<Option<WorkerGroup<VM>>>,
     /// The shared part of the GC worker object of the controller thread
     coordinator_worker_shared: Arc<GCWorkerShared<VM>>,
     /// Condition Variable for worker synchronization
@@ -34,7 +34,6 @@ unsafe impl<VM: VMBinding> Sync for GCWorkScheduler<VM> {}
 impl<VM: VMBinding> GCWorkScheduler<VM> {
     pub fn new(num_workers: usize, affinity: AffinityKind) -> Arc<Self> {
         let worker_monitor: Arc<WorkerMonitor> = Arc::new(WorkerMonitor::new(num_workers));
-        let worker_group = WorkerGroup::new(num_workers);
 
         // Create work buckets for workers.
         // TODO: Replace `array_from_fn` with `std::array::from_fn` after bumping MSRV.
@@ -69,7 +68,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         Arc::new(Self {
             work_buckets,
-            worker_group,
+            worker_group: Arc::new(None),
             coordinator_worker_shared,
             worker_monitor,
             affinity,
@@ -77,11 +76,17 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn num_workers(&self) -> usize {
-        self.worker_group.as_ref().worker_count()
+        self.worker_group.as_ref().as_ref().unwrap().worker_count()
     }
 
     /// Create GC threads, including the controller thread and all workers.
     pub fn spawn_gc_threads(self: &Arc<Self>, mmtk: &'static MMTK<VM>, tls: VMThread) {
+        {
+            // This is hacky, but correct -- there should be no other Arc to the workergroup, and no one should be using the worker group.
+            let mut worker_group: &mut Option<WorkerGroup<VM>> = unsafe { &mut *(Arc::into_raw(self.worker_group.clone()) as *mut _) };
+            *worker_group = Some(WorkerGroup::new(*mmtk.get_options().threads));
+        }
+
         // Spawn the controller thread.
         let coordinator_worker = GCWorker::new(
             mmtk,
@@ -99,7 +104,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         );
         VM::VMCollection::spawn_gc_thread(tls, GCThreadContext::<VM>::Controller(gc_controller));
 
-        self.worker_group.spawn(mmtk, tls)
+        self.worker_group.as_ref().as_ref().unwrap().spawn(mmtk, tls)
     }
 
     /// Resolve the affinity of a thread.
@@ -320,7 +325,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
         }
         // Try steal some packets from any worker
-        for (id, worker_shared) in self.worker_group.workers_shared.iter().enumerate() {
+        for (id, worker_shared) in self.worker_group.as_ref().as_ref().unwrap().workers_shared.iter().enumerate() {
             if id == worker.ordinal {
                 continue;
             }
@@ -375,7 +380,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub fn enable_stat(&self) {
-        for worker in &self.worker_group.workers_shared {
+        for worker in &self.worker_group.as_ref().as_ref().unwrap().workers_shared {
             let worker_stat = worker.borrow_stat();
             worker_stat.enable();
         }
@@ -385,7 +390,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
     pub fn statistics(&self) -> HashMap<String, String> {
         let mut summary = SchedulerStat::default();
-        for worker in &self.worker_group.workers_shared {
+        for worker in &self.worker_group.as_ref().as_ref().unwrap().workers_shared {
             let worker_stat = worker.borrow_stat();
             summary.merge(&worker_stat);
         }
