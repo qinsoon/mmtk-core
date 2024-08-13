@@ -898,3 +898,10 @@ pub fn add_work_packets<VM: VMBinding>(
 ) {
     mmtk.scheduler.work_buckets[bucket].bulk_add(packets)
 }
+
+pub fn log_object_info<VM: VMBinding>(object: ObjectReference) {
+    use crate::mmtk::SFT_MAP;
+    SFT_MAP
+        .get_checked(object.to_address::<VM>())
+        .log_object_info(object)
+}

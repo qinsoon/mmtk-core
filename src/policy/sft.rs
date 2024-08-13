@@ -101,6 +101,21 @@ pub trait SFT {
         object: ObjectReference,
         worker: GCWorkerMutRef,
     ) -> ObjectReference;
+
+    fn log_object_info(&self, _object: ObjectReference) {
+        eprintln!("The policy does not provide any info about the object");
+    }
+}
+
+pub fn log_global_object_info<VM: VMBinding>(object: ObjectReference) {
+    use crate::vm::ObjectModel;
+    let is_unlogged = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.is_unlogged::<VM>(object, std::sync::atomic::Ordering::SeqCst);
+    eprintln!("log_bit unlogged: {}", is_unlogged);
+    #[cfg(feature = "vo_bit")]
+    {
+        let is_vo = crate::util::metadata::vo_bit::is_vo_bit_set::<VM>(object);
+        eprintln!("vo_bit: {}", is_vo);
+    }
 }
 
 // Create erased VM refs for these types that will be used in `sft_trace_object()`.

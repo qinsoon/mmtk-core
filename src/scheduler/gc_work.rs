@@ -414,6 +414,9 @@ impl<C: GCWorkContext> GCWork<C::VM> for ScanMutatorRoots<C> {
             <C::VM as VMBinding>::VMScanning::notify_initial_thread_scan_complete(
                 false, worker.tls,
             );
+            assert!(!mmtk.scheduler.work_buckets[crate::scheduler::WorkBucketStage::TPinningClosure].is_activated());
+            assert!(!mmtk.scheduler.work_buckets[crate::scheduler::WorkBucketStage::PinningRootsTrace].is_activated());
+            assert!(!mmtk.scheduler.work_buckets[crate::scheduler::WorkBucketStage::Closure].is_activated());
             mmtk.set_gc_status(GcStatus::GcProper);
         }
     }

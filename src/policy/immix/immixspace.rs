@@ -162,6 +162,52 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     ) -> ObjectReference {
         panic!("We do not use SFT to trace objects for Immix. sft_trace_object() cannot be used.")
     }
+    fn log_object_info(&self, object: ObjectReference) {
+        // Log bit
+        if self.common.needs_log_bit {
+            let is_unlogged = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.is_unlogged::<VM>(object, std::sync::atomic::Ordering::SeqCst);
+            eprintln!("log_bit unlogged: {}", is_unlogged);
+        }
+        // VO bit
+        #[cfg(feature = "vo_bit")]
+        {
+            let is_vo = crate::util::metadata::vo_bit::is_vo_bit_set::<VM>(object);
+            eprintln!("vo_bit: {}", is_vo);
+        }
+
+        // Object mark
+        let marked = self.is_marked(object);
+        let mark_state = self.mark_state;
+        eprintln!("marked: {}, mark state: {}", marked, mark_state);
+
+        // Line state
+        let line = Line::containing::<VM>(object);
+        let line_mark_state = self.line_mark_state.load(Ordering::SeqCst);
+        let line_unavail_state = self.line_unavail_state.load(Ordering::SeqCst);
+        let line_marked = line.is_marked(line_mark_state);
+        eprintln!("line: mark_state {}, unavail_state {}, is_marked {}", line_mark_state, line_unavail_state, line_marked);
+
+        // Block state
+        let block = line.block();
+        let block_state = block.get_state();
+        eprintln!("block: state {:?}", block_state);
+
+        // Forwarding
+        {
+            let forwarding_state = object_forwarding::get_forwarding_status::<VM>(object);
+            eprintln!("forwarding state: {}", forwarding_state);
+            if object_forwarding::is_forwarded_or_being_forwarded::<VM>(object) {
+                eprintln!("forwarding pointer: {:?}", object_forwarding::read_forwarding_pointer::<VM>(object));
+            }
+        }
+
+        // Pinning
+        #[cfg(feature = "object_pinning")]
+        {
+            let is_pinned = self.is_object_pinned(object);
+            eprintln!("pinned: {}", is_pinned);
+        }
+    }
 }
 
 impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {

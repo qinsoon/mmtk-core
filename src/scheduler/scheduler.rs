@@ -268,6 +268,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             }
             let bucket = &self.work_buckets[id];
             let bucket_opened = bucket.update(self);
+            if bucket_opened {
+                info!("Bucket {:?} is opened", id);
+            }
             buckets_updated = buckets_updated || bucket_opened;
             if bucket_opened {
                 probe!(mmtk, bucket_opened, id);
