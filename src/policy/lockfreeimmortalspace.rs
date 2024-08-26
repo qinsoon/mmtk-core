@@ -16,6 +16,7 @@ use crate::util::heap::VMRequest;
 use crate::util::memory::MmapStrategy;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
+use crate::util::object_enum::ObjectEnumerator;
 use crate::util::opaque_pointer::*;
 use crate::util::ObjectReference;
 use crate::vm::VMBinding;
@@ -166,6 +167,10 @@ impl<VM: VMBinding> Space<VM> for LockFreeImmortalSpace<VM> {
         side_metadata_sanity_checker
             .verify_metadata_context(std::any::type_name::<Self>(), &self.metadata)
     }
+
+    fn enumerate_objects(&self, enumerator: &mut dyn ObjectEnumerator) {
+        enumerator.visit_address_range(self.start, self.start + self.total_bytes);
+    }
 }
 
 use crate::plan::{ObjectQueue, VectorObjectQueue};
@@ -232,11 +237,10 @@ impl<VM: VMBinding> LockFreeImmortalSpace<VM> {
         };
 
         // Eagerly memory map the entire heap (also zero all the memory)
-        let strategy = if *args.options.transparent_hugepages {
-            MmapStrategy::TransparentHugePages
-        } else {
-            MmapStrategy::Normal
-        };
+        let strategy = MmapStrategy::new(
+            *args.options.transparent_hugepages,
+            crate::util::memory::MmapProtection::ReadWrite,
+        );
         crate::util::memory::dzmmap_noreplace(start, aligned_total_bytes, strategy).unwrap();
         if space
             .metadata
