@@ -522,7 +522,7 @@ impl ObjectReference {
     pub fn from_raw_address(addr: Address) -> Option<ObjectReference> {
         debug_assert!(
             addr.is_aligned_to(Self::ALIGNMENT),
-            "ObjectReference is required to be word aligned"
+            "ObjectReference is required to be word aligned.  addr: {addr}"
         );
         NonZeroUsize::new(addr.0).map(ObjectReference)
     }
@@ -539,7 +539,7 @@ impl ObjectReference {
         debug_assert!(!addr.is_zero());
         debug_assert!(
             addr.is_aligned_to(Self::ALIGNMENT),
-            "ObjectReference is required to be word aligned"
+            "ObjectReference is required to be word aligned.  addr: {addr}"
         );
         ObjectReference(NonZeroUsize::new_unchecked(addr.0))
     }
@@ -568,6 +568,15 @@ impl ObjectReference {
         use crate::vm::ObjectModel;
         let object_start = VM::VMObjectModel::ref_to_object_start(self);
         debug_assert!(!VM::VMObjectModel::UNIFIED_OBJECT_REFERENCE_ADDRESS || object_start == self.to_raw_address(), "The binding claims unified object reference address, but for object reference {}, ref_to_object_start() returns {}", self, object_start);
+        debug_assert!(
+            self.to_raw_address()
+                >= object_start + VM::VMObjectModel::OBJECT_REF_OFFSET_LOWER_BOUND,
+            "The invariant `object_ref >= object_start + OBJECT_REF_OFFSET_LOWER_BOUND` is violated. \
+            object_ref: {}, object_start: {}, OBJECT_REF_OFFSET_LOWER_BOUND: {}",
+            self.to_raw_address(),
+            object_start,
+            VM::VMObjectModel::OBJECT_REF_OFFSET_LOWER_BOUND,
+        );
         object_start
     }
 
@@ -582,7 +591,7 @@ impl ObjectReference {
         debug_assert!(!VM::VMObjectModel::UNIFIED_OBJECT_REFERENCE_ADDRESS || addr == obj.to_raw_address(), "The binding claims unified object reference address, but for address {}, the object reference is {}", addr, obj);
         debug_assert!(
             obj.to_raw_address().is_aligned_to(Self::ALIGNMENT),
-            "ObjectReference is required to be word aligned"
+            "ObjectReference is required to be word aligned.  addr: {addr}, obj: {obj}"
         );
         obj
     }

@@ -1027,12 +1027,10 @@ impl SideMetadataSpec {
         let region_bytes = 1 << self.log_bytes_in_region;
         // Figure out the range that we need to search.
         let start_addr = data_addr.align_down(region_bytes);
-        let end_addr = data_addr
-            .saturating_sub(search_limit_bytes)
-            .align_down(region_bytes);
+        let end_addr = data_addr.saturating_sub(search_limit_bytes) + 1usize;
 
         let mut cursor = start_addr;
-        while cursor > end_addr {
+        while cursor >= end_addr {
             // We encounter an unmapped address. Just return None.
             if !cursor.is_mapped() {
                 return None;
@@ -1068,13 +1066,13 @@ impl SideMetadataSpec {
         let end_addr = data_addr;
 
         // Then figure out the start and end metadata address and bits.
+        // The start bit may not be accurate, as we map any address in the region to the same bit.
+        // We will filter the result at the end to make sure the found address is in the search range.
         let start_meta_addr = address_to_contiguous_meta_address(self, start_addr);
         let start_meta_shift = meta_byte_lshift(self, start_addr);
         let end_meta_addr = address_to_contiguous_meta_address(self, end_addr);
         let end_meta_shift = meta_byte_lshift(self, end_addr);
 
-        // The result will be set by one of the following closures.
-        // Use Cell so it doesn't need to be mutably borrowed by the two closures which Rust will complain.
         let mut res = None;
 
         let mut visitor = |range: BitByteRange| {
@@ -1124,7 +1122,12 @@ impl SideMetadataSpec {
             &mut visitor,
         );
 
+        // We have to filter the result. We search between [start_addr, end_addr). But we actually
+        // search with metadata bits. It is possible the metadata bit for start_addr is the same bit
+        // as an address that is before start_addr. E.g. 0x2010f026360 and 0x2010f026361 are mapped
+        // to the same bit, 0x2010f026361 is the start address and 0x2010f026360 is outside the search range.
         res.map(|addr| addr.align_down(1 << self.log_bytes_in_region))
+            .filter(|addr| *addr >= start_addr && *addr < end_addr)
     }
 
     /// Search for data addresses that have non zero values in the side metadata.  This method is
