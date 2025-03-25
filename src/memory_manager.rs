@@ -40,7 +40,9 @@ use std::collections::HashMap;
 ///    supported. Currently we assume a binding will only need one MMTk instance. Note that GC is enabled by default and the binding should
 ///    implement `VMCollection::is_collection_enabled()` if it requires that the GC should be disabled at a particular time.
 ///
-/// Note that this method will attempt to initialize a logger. If the VM would like to use its own logger, it should initialize the logger before calling this method.
+/// This method will attempt to initialize the built-in `env_logger` if the Cargo feature "builtin_env_logger" is enabled (by default).
+/// If the VM would like to use its own logger, it should disable the default feature "builtin_env_logger" in `Cargo.toml`.
+///
 /// Note that, to allow MMTk to do GC properly, `initialize_collection()` needs to be called after this call when
 /// the VM's thread system is ready to spawn GC workers.
 ///
@@ -53,12 +55,7 @@ use std::collections::HashMap;
 /// Arguments:
 /// * `builder`: The reference to a MMTk builder.
 pub fn mmtk_init<VM: VMBinding>(builder: &MMTKBuilder) -> Box<MMTK<VM>> {
-    match crate::util::logger::try_init() {
-        Ok(_) => debug!("MMTk initialized the logger."),
-        Err(_) => debug!(
-            "MMTk failed to initialize the logger. Possibly a logger has been initialized by user."
-        ),
-    }
+    crate::util::logger::try_init();
     #[cfg(all(feature = "perf_counter", target_os = "linux"))]
     {
         use std::fs::File;
@@ -570,13 +567,21 @@ pub fn total_bytes<VM: VMBinding>(mmtk: &MMTK<VM>) -> usize {
     mmtk.get_plan().get_total_pages() << LOG_BYTES_IN_PAGE
 }
 
-/// Trigger a garbage collection as requested by the user.
+/// The application code has requested a collection. This is just a GC hint, and
+/// we may ignore it.
+///
+/// Returns whether a GC was ran or not. If MMTk triggers a GC, this method will block the
+/// calling thread and return true when the GC finishes. Otherwise, this method returns
+/// false immediately.
 ///
 /// Arguments:
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `tls`: The thread that triggers this collection request.
-pub fn handle_user_collection_request<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
-    mmtk.handle_user_collection_request(tls, false, false);
+pub fn handle_user_collection_request<VM: VMBinding>(
+    mmtk: &MMTK<VM>,
+    tls: VMMutatorThread,
+) -> bool {
+    mmtk.handle_user_collection_request(tls, false, false)
 }
 
 /// Is the object alive?

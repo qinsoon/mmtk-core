@@ -382,13 +382,13 @@ impl<VM: VMBinding> MMTK<VM> {
     /// Return true if the current GC is an emergency GC.
     ///
     /// An emergency GC happens when a normal GC cannot reclaim enough memory to satisfy allocation
-    /// requests.  Plans may do full-heap GC, defragmentation, etc. during emergency in order to
+    /// requests.  Plans may do full-heap GC, defragmentation, etc. during emergency GCs in order to
     /// free up more memory.
     ///
     /// VM bindings can call this function during GC to check if the current GC is an emergency GC.
     /// If it is, the VM binding is recommended to retain fewer objects than normal GCs, to the
-    /// extent allowed by the specification of the VM or langauge.  For example, the VM binding may
-    /// choose not to retain objects used for caching.  Specifically, for Java virtual machines,
+    /// extent allowed by the specification of the VM or the language.  For example, the VM binding
+    /// may choose not to retain objects used for caching.  Specifically, for Java virtual machines,
     /// that means not retaining referents of [`SoftReference`][java-soft-ref] which is primarily
     /// designed for implementing memory-sensitive caches.
     ///
@@ -405,6 +405,10 @@ impl<VM: VMBinding> MMTK<VM> {
     /// The application code has requested a collection. This is just a GC hint, and
     /// we may ignore it.
     ///
+    /// Returns whether a GC was ran or not. If MMTk triggers a GC, this method will block the
+    /// calling thread and return true when the GC finishes. Otherwise, this method returns
+    /// false immediately.
+    ///
     /// # Arguments
     /// * `tls`: The mutator thread that requests the GC
     /// * `force`: The request cannot be ignored (except for NoGC)
@@ -414,11 +418,11 @@ impl<VM: VMBinding> MMTK<VM> {
         tls: VMMutatorThread,
         force: bool,
         exhaustive: bool,
-    ) {
+    ) -> bool {
         use crate::vm::Collection;
         if !self.get_plan().constraints().collects_garbage {
             warn!("User attempted a collection request, but the plan can not do GC. The request is ignored.");
-            return;
+            return false;
         }
 
         if force || !*self.options.ignore_system_gc && VM::VMCollection::is_collection_enabled() {
@@ -434,7 +438,10 @@ impl<VM: VMBinding> MMTK<VM> {
                 .store(true, Ordering::Relaxed);
             self.gc_requester.request();
             VM::VMCollection::block_for_gc(tls);
+            return true;
         }
+
+        false
     }
 
     /// MMTK has requested stop-the-world activity (e.g., stw within a concurrent gc).
