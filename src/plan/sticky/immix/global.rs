@@ -203,6 +203,11 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
         }
         true
     }
+
+    #[cfg(feature = "dump_memory_stats")]
+    fn dump_memory_stats(&self) {
+        self.immix.immix_space.dump_memory_stats();
+    }
 }
 
 impl<VM: VMBinding> GenerationalPlan for StickyImmix<VM> {
@@ -261,7 +266,7 @@ impl<VM: VMBinding> crate::plan::generational::global::GenerationalPlanExt<VM> f
                     );
                     self.immix
                         .immix_space
-                        .trace_object_without_moving(queue, object)
+                        .trace_object_without_moving(queue, object, KIND == TRACE_KIND_TRANSITIVE_PIN)
                 } else if crate::policy::immix::PREFER_COPY_ON_NURSERY_GC {
                     let ret = self.immix.immix_space.trace_object_with_opportunistic_copy(
                         queue,
@@ -289,7 +294,7 @@ impl<VM: VMBinding> crate::plan::generational::global::GenerationalPlanExt<VM> f
                     );
                     self.immix
                         .immix_space
-                        .trace_object_without_moving(queue, object)
+                        .trace_object_without_moving(queue, object, false)
                 };
 
                 return object;
