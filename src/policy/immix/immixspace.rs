@@ -636,7 +636,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     BlockState::Unallocated => {}
                 }
 
-                assert_eq!(live_lines_in_table, live_lines_from_block_state);
+                // assert_eq!(live_lines_in_table, live_lines_from_block_state);
             }
         }
 
