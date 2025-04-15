@@ -382,7 +382,7 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         }
     }
 
-    fn trace_object<Q: ObjectQueue>(
+    pub fn trace_object<Q: ObjectQueue>(
         &self,
         queue: &mut Q,
         object: ObjectReference,
