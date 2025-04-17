@@ -71,8 +71,9 @@ impl Defrag {
         user_triggered: bool,
         exhausted_reusable_space: bool,
         full_heap_system_gc: bool,
+        force_non_moving: bool,
     ) {
-        let in_defrag = super::DEFRAG
+        let in_defrag = (super::DEFRAG && !force_non_moving)
             && (emergency_collection
                 || (collection_attempts > 1)
                 || !exhausted_reusable_space

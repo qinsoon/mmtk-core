@@ -8,6 +8,7 @@ use crate::plan::Mutator;
 use crate::policy::immortalspace::ImmortalSpace;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::marksweepspace::native_ms::MarkSweepSpace;
+use crate::policy::immix::ImmixSpace;
 use crate::policy::space::{PlanCreateSpaceArgs, Space};
 #[cfg(feature = "vm_space")]
 use crate::policy::vmspace::VMSpace;
@@ -557,7 +558,7 @@ pub struct CommonPlan<VM: VMBinding> {
     #[space]
     pub los: LargeObjectSpace<VM>,
     #[space]
-    pub nonmoving: MarkSweepSpace<VM>,
+    pub nonmoving: ImmixSpace<VM>,
     #[parent]
     pub base: BasePlan<VM>,
 }
@@ -575,12 +576,17 @@ impl<VM: VMBinding> CommonPlan<VM> {
                 args.get_space_args("los", true, false, VMRequest::discontiguous()),
                 false,
             ),
-            nonmoving: MarkSweepSpace::new(args.get_space_args(
+            nonmoving: ImmixSpace::new(args.get_space_args(
                 "nonmoving",
                 true,
                 false,
                 VMRequest::discontiguous(),
-            )),
+            ), crate::policy::immix::ImmixSpaceArgs {
+                unlog_object_when_traced: false,
+                #[cfg(feature = "vo_bit")]
+                mixed_age: false,
+                never_move_objects: true,
+            }),
             base: BasePlan::new(args),
         }
     }
@@ -595,14 +601,14 @@ impl<VM: VMBinding> CommonPlan<VM> {
     pub fn prepare(&mut self, tls: VMWorkerThread, full_heap: bool) {
         self.immortal.prepare();
         self.los.prepare(full_heap);
-        self.nonmoving.prepare(full_heap);
+        self.nonmoving.prepare(full_heap, None);
         self.base.prepare(tls, full_heap)
     }
 
     pub fn release(&mut self, tls: VMWorkerThread, full_heap: bool) {
         self.immortal.release();
         self.los.release(full_heap);
-        self.nonmoving.release();
+        self.nonmoving.release(full_heap);
         self.base.release(tls, full_heap)
     }
 
@@ -619,7 +625,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
         &self.los
     }
 
-    pub fn get_nonmoving(&self) -> &MarkSweepSpace<VM> {
+    pub fn get_nonmoving(&self) -> &ImmixSpace<VM> {
         &self.nonmoving
     }
 }

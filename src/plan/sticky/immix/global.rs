@@ -117,7 +117,7 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
             // Prepare both large object space and immix space
             self.immix.immix_space.prepare(
                 false,
-                crate::policy::immix::defrag::StatsForDefrag::new(self),
+                Some(crate::policy::immix::defrag::StatsForDefrag::new(self)),
             );
             self.immix.common.los.prepare(false);
         } else {
@@ -332,6 +332,7 @@ impl<VM: VMBinding> StickyImmix<VM> {
                 // In StickyImmix, both young and old objects are allocated in the ImmixSpace.
                 #[cfg(feature = "vo_bit")]
                 mixed_age: true,
+                never_move_objects: false,
             },
         );
         Self {

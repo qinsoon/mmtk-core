@@ -58,8 +58,9 @@ impl ChunkState {
         encode |= 0x80;
         ChunkState(encode)
     }
-    pub fn free() -> ChunkState {
-        ChunkState(0)
+    pub fn free(space_index: usize) -> ChunkState {
+        debug_assert!(space_index < crate::util::heap::layout::heap_parameters::MAX_SPACES);
+        ChunkState(space_index as u8)
     }
     pub fn is_free(&self) -> bool {
         self.0 & 0x80 == 0
@@ -68,7 +69,6 @@ impl ChunkState {
         !self.is_free()
     }
     pub fn get_space_index(&self) -> usize {
-        debug_assert!(self.is_allocated());
         let index = (self.0 & 0x0F) as usize;
         debug_assert!(index < crate::util::heap::layout::heap_parameters::MAX_SPACES);
         index
@@ -89,6 +89,7 @@ impl std::fmt::Debug for ChunkState {
 /// A plan can use this to maintain records for the chunks that they used, and the states of the chunks.
 /// Any plan that uses the chunk map should include the `ALLOC_TABLE` spec in their local sidemetadata specs
 pub struct ChunkMap {
+    space_index: usize,
     chunk_range: Mutex<Range<Chunk>>,
 }
 
@@ -97,14 +98,20 @@ impl ChunkMap {
     pub const ALLOC_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::CHUNK_MARK;
 
-    pub fn new() -> Self {
+    pub fn new(space_index: usize) -> Self {
         Self {
+            space_index,
             chunk_range: Mutex::new(Chunk::ZERO..Chunk::ZERO),
         }
     }
 
     /// Set chunk state
-    pub fn set(&self, chunk: Chunk, state: ChunkState) {
+    pub fn set(&self, chunk: Chunk, allocated: bool) {
+        let state = if allocated {
+            ChunkState::allocated(self.space_index)
+        } else {
+            ChunkState::free(self.space_index)
+        };
         // Do nothing if the chunk is already in the expected state.
         if self.get(chunk) == state {
             return;
@@ -140,10 +147,16 @@ impl ChunkMap {
         ChunkState(byte)
     }
 
+    fn is_my_chunk(&self, chunk: Chunk) -> bool {
+        let byte = unsafe { Self::ALLOC_TABLE.load::<u8>(chunk.start()) };
+        let state = ChunkState(byte);
+        state.get_space_index() == self.space_index
+    }
+
     /// A range of all chunks in the heap.
-    pub fn all_chunks(&self) -> RegionIterator<Chunk> {
+    pub fn all_chunks(&self) -> impl Iterator<Item = Chunk> + use<'_>{
         let chunk_range = self.chunk_range.lock();
-        RegionIterator::<Chunk>::new(chunk_range.start, chunk_range.end)
+        RegionIterator::<Chunk>::new(chunk_range.start, chunk_range.end).filter(|c| self.is_my_chunk(*c))
     }
 
     /// Helper function to create per-chunk processing work packets for each allocated chunks.
@@ -159,11 +172,5 @@ impl ChunkMap {
             work_packets.push(func(chunk));
         }
         work_packets
-    }
-}
-
-impl Default for ChunkMap {
-    fn default() -> Self {
-        Self::new()
     }
 }

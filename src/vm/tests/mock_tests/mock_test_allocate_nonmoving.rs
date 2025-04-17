@@ -6,7 +6,7 @@ use super::mock_test_prelude::*;
 use crate::plan::AllocationSemantics;
 
 #[test]
-pub fn allocate_alignment() {
+pub fn allocate_nonmoving() {
     with_mockvm(
         || -> MockVM {
             MockVM {
@@ -28,6 +28,7 @@ pub fn allocate_alignment() {
                 AllocationSemantics::Default,
             );
             assert!(!addr.is_zero());
+            info!("Allocated default at: {:#x}", addr);
 
             // Non moving alloc
             let addr = memory_manager::alloc(
@@ -38,6 +39,7 @@ pub fn allocate_alignment() {
                 AllocationSemantics::NonMoving,
             );
             assert!(!addr.is_zero());
+            info!("Allocated nonmoving at: {:#x}", addr);
         },
         no_cleanup,
     )

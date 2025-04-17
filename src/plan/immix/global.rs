@@ -85,7 +85,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.common.prepare(tls, true);
         self.immix_space.prepare(
             true,
-            crate::policy::immix::defrag::StatsForDefrag::new(self),
+            Some(crate::policy::immix::defrag::StatsForDefrag::new(self)),
         );
     }
 
@@ -139,6 +139,7 @@ impl<VM: VMBinding> Immix<VM> {
                 unlog_object_when_traced: false,
                 #[cfg(feature = "vo_bit")]
                 mixed_age: false,
+                never_move_objects: false,
             },
         )
     }

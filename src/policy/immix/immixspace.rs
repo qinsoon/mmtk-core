@@ -73,6 +73,7 @@ pub struct ImmixSpaceArgs {
     // Currently only used when "vo_bit" is enabled.  Using #[cfg(...)] to eliminate dead code warning.
     #[cfg(feature = "vo_bit")]
     pub mixed_age: bool,
+    pub never_move_objects: bool,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -299,6 +300,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let scheduler = args.scheduler.clone();
         let common =
             CommonSpace::new(args.into_policy_args(true, false, Self::side_metadata_specs()));
+        let space_index = common.descriptor.get_index();
         ImmixSpace {
             pr: if common.vmrequest.is_discontiguous() {
                 BlockPageResource::new_discontiguous(
@@ -316,7 +318,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 )
             },
             common,
-            chunk_map: ChunkMap::new(),
+            chunk_map: ChunkMap::new(space_index),
             line_mark_state: AtomicU8::new(Line::RESET_MARK_STATE),
             line_unavail_state: AtomicU8::new(Line::RESET_MARK_STATE),
             lines_consumed: AtomicUsize::new(0),
@@ -362,6 +364,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             user_triggered_collection,
             self.reusable_blocks.len() == 0,
             full_heap_system_gc,
+            self.space_args.never_move_objects,
         );
         self.defrag.in_defrag()
     }
@@ -371,7 +374,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
-    pub fn prepare(&mut self, major_gc: bool, plan_stats: StatsForDefrag) {
+    pub fn prepare(&mut self, major_gc: bool, plan_stats: Option<StatsForDefrag>) {
         if major_gc {
             // Update mark_state
             if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
@@ -390,8 +393,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
 
             // Prepare defrag info
-            if super::DEFRAG {
-                self.defrag.prepare(self, plan_stats);
+            if !self.space_args.never_move_objects && super::DEFRAG {
+                self.defrag.prepare(self, plan_stats.unwrap());
             }
 
             // Prepare each block for GC
@@ -524,7 +527,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.defrag.notify_new_clean_block(copy);
         let block = Block::from_aligned_address(block_address);
         block.init(copy);
-        self.chunk_map.set(block.chunk(), ChunkState::allocated(self.common().descriptor.get_index()));
+        self.chunk_map.set(block.chunk(), true);
         self.lines_consumed
             .fetch_add(Block::LINES, Ordering::SeqCst);
         Some(block)
@@ -950,7 +953,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
         probe!(mmtk, sweep_chunk, allocated_blocks);
         // Set this chunk as free if there is not live blocks.
         if allocated_blocks == 0 {
-            self.space.chunk_map.set(self.chunk, ChunkState::free())
+            self.space.chunk_map.set(self.chunk, false)
         }
         self.space.defrag.add_completed_mark_histogram(histogram);
         self.epilogue.finish_one_work_packet();
