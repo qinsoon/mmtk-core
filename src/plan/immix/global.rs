@@ -202,4 +202,8 @@ impl<VM: VMBinding> Immix<VM> {
     pub(in crate::plan) fn set_last_gc_was_defrag(&self, defrag: bool, order: Ordering) {
         self.last_gc_was_defrag.store(defrag, order)
     }
+
+    pub fn skip_moving_in_this_gc(&self) {
+        self.immix_space.set_skip_moving_in_this_gc();
+    }
 }

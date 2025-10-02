@@ -45,6 +45,10 @@ mod generational;
 mod sticky;
 
 mod immix;
+// We normally don't need this. This allows the Julia binding to skip moving for a GC if there is any concurrent running native thread.
+// TODO: We need a better way to engineer this.
+pub use immix::Immix;
+
 mod markcompact;
 mod marksweep;
 mod nogc;

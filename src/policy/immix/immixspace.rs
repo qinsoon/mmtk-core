@@ -30,7 +30,7 @@ use crate::{
     MMTK,
 };
 use atomic::Ordering;
-use std::sync::{atomic::AtomicU8, atomic::AtomicUsize, Arc};
+use std::sync::{atomic::AtomicBool, atomic::AtomicU8, atomic::AtomicUsize, Arc};
 
 pub(crate) const TRACE_KIND_FAST: TraceKind = 0;
 pub(crate) const TRACE_KIND_DEFRAG: TraceKind = 1;
@@ -133,6 +133,8 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// Keeping track of immix stats
     #[cfg(feature = "dump_memory_stats")]
     immix_stats: ImmixSpaceStats,
+
+    skip_moving: AtomicBool,
 }
 
 /// Some arguments for Immix Space.
@@ -446,6 +448,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             space_args,
             #[cfg(feature = "dump_memory_stats")]
             immix_stats: Default::default(),
+            skip_moving: AtomicBool::new(false),
         }
     }
 
@@ -607,6 +610,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
 
         self.lines_consumed.store(0, Ordering::Relaxed);
+
+        self.skip_moving.store(false, Ordering::Relaxed);
     }
 
     /// This is called when a GC finished.
@@ -836,6 +841,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         worker: &mut GCWorker<VM>,
         nursery_collection: bool,
     ) -> ObjectReference {
+        if self.skip_moving.load(Ordering::Relaxed) {
+            return self.trace_object_without_moving(queue, object, false);
+        }
+
         let copy_context = worker.get_copy_context_mut();
         debug_assert!(!super::BLOCK_ONLY);
 
@@ -1083,6 +1092,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub(crate) fn is_defrag_enabled(&self) -> bool {
         !self.space_args.never_move_objects
+    }
+
+    pub(crate) fn set_skip_moving_in_this_gc(&self) {
+        self.skip_moving.store(true, Ordering::SeqCst);
     }
 }
 
