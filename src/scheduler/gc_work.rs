@@ -1222,3 +1222,35 @@ impl<VM: VMBinding> ProcessEdgesWork for UnsupportedProcessEdges<VM> {
         panic!("unsupported!")
     }
 }
+
+pub struct AnonymousWork<VM, F>
+where
+    VM: VMBinding,
+    F: FnMut(&mut GCWorker<VM>, &'static MMTK<VM>) + Send + 'static,
+{
+    work_fn: F,
+    _marker: PhantomData<VM>,
+}
+
+impl<VM, F> AnonymousWork<VM, F>
+where
+    VM: VMBinding,
+    F: FnMut(&mut GCWorker<VM>, &'static MMTK<VM>) + Send + 'static,
+{
+    pub fn new(f: F) -> Self {
+        Self {
+            work_fn: f,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<VM, F> GCWork<VM> for AnonymousWork<VM, F>
+where
+    VM: VMBinding,
+    F: FnMut(&mut GCWorker<VM>, &'static MMTK<VM>) + Send + 'static,
+{
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        (self.work_fn)(worker, mmtk);
+    }
+}
