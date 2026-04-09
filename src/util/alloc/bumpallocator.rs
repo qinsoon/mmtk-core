@@ -194,15 +194,10 @@ impl<VM: VMBinding> BumpAllocator<VM> {
         offset: usize,
         stress_test: bool,
     ) -> Address {
-        if self.space.handle_obvious_oom_request(
+        if self.handle_obvious_oom_request(
             self.tls,
             size,
-            self.get_context().get_alloc_options(),
         ) {
-            // Relaxed store is fine since this is a thread-local boolean.
-            self.get_context()
-                .thrown_oom
-                .store(true, std::sync::atomic::Ordering::Relaxed);
             return Address::ZERO;
         }
 

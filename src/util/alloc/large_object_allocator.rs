@@ -52,15 +52,10 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
         let maxbytes = allocator::get_maximum_aligned_size::<VM>(size, align);
         let pages = crate::util::conversions::bytes_to_pages_up(maxbytes);
 
-        if self.space.handle_obvious_oom_request(
+        if self.handle_obvious_oom_request(
             self.tls,
             pages << crate::util::constants::LOG_BYTES_IN_PAGE,
-            self.get_context().get_alloc_options(),
         ) {
-            // Relaxed store is fine since this is a thread-local boolean.
-            self.get_context()
-                .thrown_oom
-                .store(true, std::sync::atomic::Ordering::Relaxed);
             return Address::ZERO;
         }
 

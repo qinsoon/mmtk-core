@@ -312,6 +312,37 @@ pub trait Allocator<VM: VMBinding>: Downcast {
         unimplemented!()
     }
 
+    /// Check if the requested `size` is an obvious out-of-memory case using
+    /// [`Self::will_oom_on_acquire`] and, if it is, call `Collection::out_of_memory`.  Return the
+    /// result of `will_oom_on_acquire`.
+    fn handle_obvious_oom_request(
+        &self,
+        tls: VMThread,
+        size: usize
+    ) -> bool {
+        if self.get_context().gc_trigger.will_oom_on_alloc(size) {
+            if self.get_context().get_alloc_options().allow_oom_call {
+                self.out_of_memory(tls);
+            }
+            return true;
+        }
+        false
+    }
+
+    /// For allocators to throw out of memory error to the VM.
+    fn out_of_memory(&self, tls: VMThread) {
+        VM::VMCollection::out_of_memory(tls, AllocationError::HeapOutOfMemory);
+        self.get_context().thrown_oom.store(true, Ordering::Relaxed);
+    }
+
+    /// For allocators to return the result of an allocation. This is usually called from alloc_slow_inline, and
+    /// each allocator does not need to overwrite this value.
+    fn alloc_slow_return(&self, result: Address) -> Address {
+        self.get_context().thrown_oom.store(false, Ordering::Relaxed);
+        self.get_context().state.allocation_success.store(result.is_zero(), Ordering::Relaxed);
+        result
+    }
+
     /// An allocation attempt. The implementation of this function depends on the allocator used.
     /// If an allocator supports thread local allocations, then the allocation will be serviced
     /// from its TLAB, otherwise it will default to using the slowpath, i.e. [`alloc_slow`](Allocator::alloc_slow).
@@ -410,6 +441,7 @@ pub trait Allocator<VM: VMBinding>: Downcast {
         let tls = self.get_tls();
         let is_mutator = VM::VMActivePlan::is_mutator(tls);
         let stress_test = self.get_context().options.is_stress_test_gc_enabled();
+        assert!(self.get_context().thrown_oom.load(Ordering::Relaxed) == false, "We should not enter alloc_slow_inline if we have already thrown OOM for this allocation request.");
 
         // Information about the previous collection.
         let mut emergency_collection = false;
@@ -437,15 +469,12 @@ pub trait Allocator<VM: VMBinding>: Downcast {
 
             if !is_mutator {
                 debug_assert!(!result.is_zero());
+                // Collector allocation --  no need to call alloc_slow_return.
                 return result;
             }
 
             if !result.is_zero() {
                 // Report allocation success to assist OutOfMemory handling.
-                // Relaxed storing is fine since this is a thread-local boolean.
-                self.get_context()
-                    .thrown_oom
-                    .store(false, Ordering::Relaxed);
                 if !self
                     .get_context()
                     .state
@@ -495,7 +524,7 @@ pub trait Allocator<VM: VMBinding>: Downcast {
                     }
                 }
 
-                return result;
+                return self.alloc_slow_return(result);
             }
 
             // From here on, we handle the case that alloc_once failed.
@@ -506,18 +535,13 @@ pub trait Allocator<VM: VMBinding>: Downcast {
                 // the code beyond this point tests OOM conditions and, if not OOM, try to allocate
                 // again.  Since we didn't block for GC, the allocation will fail again if we try
                 // again. So we return null immediately.
-                return Address::ZERO;
+                return self.alloc_slow_return(Address::ZERO);
             }
 
             // If we have already thrown an OOM for this allocation then return a zero.
             // Relaxed load and store is fine given this is a thread-local boolean.
             if self.get_context().thrown_oom.load(Ordering::Relaxed) {
-                // Need to reset the thrown_oom state since we're giving up on this allocation,
-                // that is to say, the thrown_oom state is *per* allocation request
-                self.get_context()
-                    .thrown_oom
-                    .store(false, Ordering::Relaxed);
-                return Address::ZERO;
+                return self.alloc_slow_return(Address::ZERO);
             }
 
             // It is possible to have cases where a thread is blocked for another GC (non emergency)
@@ -540,14 +564,8 @@ pub trait Allocator<VM: VMBinding>: Downcast {
                 if fail_with_oom {
                     // Note that we throw a `HeapOutOfMemory` error here and return a null ptr back to the VM
                     trace!("Throw HeapOutOfMemory!");
-                    VM::VMCollection::out_of_memory(tls, AllocationError::HeapOutOfMemory);
-                    // Relaxed store is fine since this is a thread-local boolean.
-                    self.get_context().thrown_oom.store(true, Ordering::Relaxed);
-                    self.get_context()
-                        .state
-                        .allocation_success
-                        .store(false, Ordering::SeqCst);
-                    return result;
+                    self.out_of_memory(tls);
+                    return self.alloc_slow_return(Address::ZERO);
                 }
             }
 
