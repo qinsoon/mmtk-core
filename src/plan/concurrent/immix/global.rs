@@ -140,10 +140,29 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
         }
 
         let pause = if self.concurrent_marking_in_progress() {
-            // FIXME: Currently it is unsafe to bypass `FinalMark` and go directly from `InitialMark` to `Full`.
-            // It is related to defragmentation.  See https://github.com/mmtk/mmtk-core/issues/1357 for more details.
-            // We currently force `FinalMark` to happen if the last pause is `InitialMark`.
-            Pause::FinalMark
+            if self.should_do_full_gc.load(Ordering::SeqCst) {
+                // The heap is full while concurrent marking is in progress. Rather than draining
+                // the remaining concurrent work and doing a `FinalMark` pause, discard the
+                // in-progress concurrent marking work and do a full heap pause immediately. By
+                // this point mutators are already stalled on the exhausted heap, so throttling
+                // marking down to `concurrent_threads` to leave room for mutators no longer buys
+                // anything; using all worker threads for an immediate STW trace gets mutators
+                // unblocked sooner.
+                //
+                // Disable and discard the `Concurrent` bucket now.  We are still running with the
+                // `WorkerMonitor`'s mutex held (we are called from the last parked worker), so no
+                // other GC worker can be concurrently executing or adding packets to this bucket
+                // from that side. Mutators may still add a few more packets (via SATB barrier
+                // flushes) before they are stopped; those are discarded again in
+                // `notify_mutators_paused` once we know mutators can no longer touch this bucket.
+                let concurrent_bucket = &scheduler.work_buckets[WorkBucketStage::Concurrent];
+                concurrent_bucket.set_enabled(false);
+                concurrent_bucket.clear();
+                info!("Discarding concurrent marking work: heap full, doing a full heap pause instead of a final mark pause");
+                Pause::Full
+            } else {
+                Pause::FinalMark
+            }
         } else if self.should_do_full_gc.load(Ordering::SeqCst)
             // For user-triggered GCs, we don't want a simple initial pause which reclaims nothing.
             // We do a full STW collection for user triggered collection instead.
@@ -220,16 +239,16 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
 
                 self.common.release(tls, true);
 
-                if pause == Pause::FinalMark {
+                // A `FinalMark` pause always follows an `InitialMark` pause. A `Full` pause may
+                // also follow an `InitialMark` pause if we discarded an in-progress concurrent
+                // marking cycle (see `schedule_collection`). In both cases, `InitialMark`'s
+                // prepare bulk set the unlog bits on the common plan's spaces, so we must bulk
+                // clear them here. A `Full` pause that was not preceded by `InitialMark` never had
+                // its unlog bits set in the first place, so there is nothing to clear.
+                if self.previous_pause() == Some(Pause::InitialMark) {
                     // Bulk clear log bits so SATB barrier will not be triggered.
                     self.common
                         .schedule_unlog_bits_op(UnlogBitsOperation::BulkClear);
-                } else {
-                    // Full pauses didn't set unlog bits in the first place,
-                    // so there is no need to clear them.
-                    // TODO: Currently InitialMark must be followed by a FinalMark.
-                    // If we allow upgrading a concurrent GC to a full STW GC,
-                    // we will need to clear the unlog bits at an appropriate place.
                 }
             }
         }
@@ -280,12 +299,28 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
         &self.common
     }
 
-    fn notify_mutators_paused(&self, _scheduler: &GCWorkScheduler<VM>) {
+    fn notify_mutators_paused(&self, scheduler: &GCWorkScheduler<VM>) {
         use crate::vm::ActivePlan;
         let pause = self.current_pause().unwrap();
         match pause {
             Pause::Full => {
+                // If this `Full` pause was reached by discarding an in-progress concurrent
+                // marking cycle (see `schedule_collection`), there may be buffered SATB/weak-ref
+                // entries in mutators' barrier buffers, and leftover `Concurrent`-bucket work that
+                // mutators queued before they were stopped. Both must be discarded here, otherwise
+                // they could leak into (and be mistaken for legitimate work in) a future
+                // concurrent marking cycle. This is a no-op if concurrent marking was not active
+                // this cycle.
+                //
+                // Set the concurrent-marking state to false *before* flushing mutators, so that
+                // `flush()` discards the buffered entries instead of turning them into new
+                // `Concurrent`-bucket work packets (see
+                // `SATBBarrierSemantics::should_create_satb_packets`).
                 self.set_concurrent_marking_state(false);
+                for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
+                    mutator.barrier.flush();
+                }
+                scheduler.work_buckets[WorkBucketStage::Concurrent].clear();
             }
             Pause::InitialMark => {
                 debug_assert!(

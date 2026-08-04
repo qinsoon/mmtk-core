@@ -38,6 +38,22 @@ impl<VM: VMBinding> BucketQueue<VM> {
         }
     }
 
+    /// Discard all the packets currently in the queue without executing them.
+    ///
+    /// Rather than popping items one at a time (which does one atomic steal per item), this
+    /// moves everything out of the injector into a scratch worker-local queue in a handful of
+    /// batches, then drops that scratch queue, which drops all the packets in it.
+    fn clear(&self) {
+        let scratch = Worker::new_fifo();
+        loop {
+            match self.queue.steal_batch(&scratch) {
+                Steal::Success(()) => continue,
+                Steal::Retry => continue,
+                Steal::Empty => break,
+            }
+        }
+    }
+
     /// Dump all the packets in this queue for debugging purpose.
     /// This function may dump items from the queue temporarily, thus should only be called when it is safe to do so
     /// (e.g. when the execution has failed already and the system is going to panic).
@@ -181,6 +197,20 @@ impl<VM: VMBinding> WorkBucket<VM> {
             self.stage
         );
         self.open.store(false, Ordering::Relaxed);
+    }
+
+    /// Discard all packets currently queued in this bucket without executing them.
+    ///
+    /// This is intended for discarding stale concurrent work (e.g. when a concurrent plan
+    /// decides to abandon an in-progress concurrent marking cycle in favor of an immediate
+    /// STW collection). It must only be called when nothing can be concurrently adding new
+    /// packets to this bucket, otherwise a packet added right after this call would linger
+    /// unexecuted and could be mistaken for legitimate pending work later.
+    pub fn clear(&self) {
+        self.queue.clear();
+        if let Some(prioritized_queue) = self.prioritized_queue.as_ref() {
+            prioritized_queue.clear();
+        }
     }
 
     /// Add a work packet to this bucket
