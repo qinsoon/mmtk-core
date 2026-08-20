@@ -41,7 +41,7 @@ impl<VM: VMBinding> GCWork<VM> for ConcurrentChunkMetadataZeroing {
             .immix_space;
         for i in 0..num_chunks {
             let chunk = self.chunks.start.next_nth(i);
-            if !ix_space.chunk_map.is_allocated(chunk) {
+            if !ix_space.chunk_map().is_allocated(chunk) {
                 continue;
             }
             Self::reset_object_mark::<VM>(chunk);
@@ -75,7 +75,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareChunksForFullGC {
             .immix_space;
         for i in 0..num_chunks {
             let chunk = self.chunks.start.next_nth(i);
-            if !ix_space.chunk_map.is_allocated(chunk) {
+            if !ix_space.chunk_map().is_allocated(chunk) {
                 continue;
             }
             // Iterate over all blocks in this chunk

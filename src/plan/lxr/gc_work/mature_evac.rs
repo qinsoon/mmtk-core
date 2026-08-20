@@ -45,7 +45,7 @@ impl<VM: VMBinding> GCWork<VM> for SelectDefragBlocks {
             .immix_space;
         for i in 0..num_chunks {
             let chunk = self.chunks.start.next_nth(i);
-            if !ix_space.chunk_map.is_allocated(chunk) {
+            if !ix_space.chunk_map().is_allocated(chunk) {
                 continue;
             }
             for block in chunk.iter_region::<Block>() {

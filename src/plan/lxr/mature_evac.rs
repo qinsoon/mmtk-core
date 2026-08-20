@@ -7,7 +7,7 @@ use crate::plan::lxr::gc_work::mature_evac::SelectDefragBlocks;
 use crate::plan::lxr::gc_work::mature_evac::SELECT_DEFRAG_BLOCK_JOB_COUNTER;
 use crate::policy::immix::block::{Block, BlockState};
 use crate::policy::immix::line::Line;
-use crate::policy::immix::ImmixSpace;
+use crate::policy::lxr::LXRImmixSpace;
 use crate::policy::space::Space;
 use crate::scheduler::WorkBucketStage;
 use crate::util::linear_scan::Region;
@@ -133,7 +133,7 @@ pub struct MatureEvacuationSet {
 
 impl MatureEvacuationSet {
     /// Release all the mature defrag source blocks
-    pub fn sweep_mature_evac_candidates<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+    pub fn sweep_mature_evac_candidates<VM: VMBinding>(&self, space: &LXRImmixSpace<VM>) {
         let mut defrag_blocks: Vec<Block> =
             std::mem::take(&mut *self.defrag_blocks.lock().unwrap());
         if defrag_blocks.is_empty() {
@@ -146,15 +146,15 @@ impl MatureEvacuationSet {
             }
             block.clear_rc_table();
             block.clear_striddle_table();
-            block.rc_sweep_mature::<VM>(space, true);
+            block.rc_sweep_mature::<VM>(space.inner(), true);
             assert!(!block.is_defrag_source());
         }
     }
 
-    pub fn schedule_defrag_selection_packets<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+    pub fn schedule_defrag_selection_packets<VM: VMBinding>(&self, space: &LXRImmixSpace<VM>) {
         let tasks =
             space
-                .chunk_map
+                .chunk_map()
                 .generate_tasks_batched(space.scheduler().num_workers(), |chunks| {
                     Box::new(SelectDefragBlocks {
                         chunks,
@@ -201,7 +201,7 @@ impl MatureEvacuationSet {
         if lxr.current_pause().unwrap() == Pause::Full {
             // Make sure LOS sweeping finishes before evac selection begin
             // FIXME: This can be done in parallel with SelectDefragBlocksInChunk packets
-            let los = lxr.common().get_los();
+            let los = lxr.los();
             los.release_rc_nursery_objects();
         }
         // Select mature defrag blocks

@@ -72,7 +72,6 @@ impl Defrag {
         user_triggered: bool,
         exhausted_reusable_space: bool,
         full_heap_system_gc: bool,
-        rc_enabled: bool,
         stress_defrag: bool,
     ) {
         let in_defrag = defrag_enabled
@@ -80,8 +79,7 @@ impl Defrag {
                 || (collection_attempts > 1)
                 || !exhausted_reusable_space
                 || stress_defrag
-                || (collect_whole_heap && user_triggered && full_heap_system_gc))
-            && !rc_enabled;
+                || (collect_whole_heap && user_triggered && full_heap_system_gc));
 
         {
             // These details are useful for debugging why a debug GC is triggered or not triggered.

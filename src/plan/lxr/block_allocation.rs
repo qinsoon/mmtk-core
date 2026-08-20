@@ -3,7 +3,7 @@ use super::LXR;
 use crate::plan::concurrent::global::ConcurrentPlan;
 use crate::plan::concurrent::Pause;
 use crate::policy::immix::block::{Block, BlockState};
-use crate::policy::immix::{ImmixHooks, ImmixSpace};
+use crate::policy::lxr::{ImmixHooks, LXRImmixSpace};
 use crate::scheduler::{GCWork, GCWorkScheduler, WorkBucketStage};
 use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::linear_scan::Region;
@@ -57,7 +57,7 @@ impl BlockCache {
 }
 
 pub struct BlockAllocation<VM: VMBinding> {
-    space: UnsafeCell<*const ImmixSpace<VM>>,
+    space: UnsafeCell<*const LXRImmixSpace<VM>>,
     lxr: UnsafeCell<*const LXR<VM>>,
     nursery_blocks: BlockCache,
     reused_blocks: BlockCache,
@@ -76,14 +76,14 @@ impl<VM: VMBinding> BlockAllocation<VM> {
         }
     }
 
-    pub fn init(&self, space: &ImmixSpace<VM>, lxr: &'static LXR<VM>) {
+    pub fn init(&self, space: &LXRImmixSpace<VM>, lxr: &'static LXR<VM>) {
         unsafe {
-            *self.space.get() = space as *const ImmixSpace<VM>;
+            *self.space.get() = space as *const LXRImmixSpace<VM>;
             *self.lxr.get() = lxr as *const LXR<VM>;
         }
     }
 
-    fn space(&self) -> &'static ImmixSpace<VM> {
+    fn space(&self) -> &'static LXRImmixSpace<VM> {
         unsafe { &**self.space.get() }
     }
 
@@ -143,7 +143,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             for b in &blocks[0..stw_limit] {
                 let block = b.load(Ordering::Relaxed);
                 debug_assert_ne!(block.get_state(), BlockState::Unallocated);
-                block.rc_sweep_nursery(space);
+                block.rc_sweep_nursery(space.inner());
             }
             if total_nursery_blocks > stw_limit {
                 let packets = blocks[stw_limit..total_nursery_blocks]

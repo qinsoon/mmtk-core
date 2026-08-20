@@ -4,6 +4,7 @@ use crate::plan::ObjectQueue;
 use crate::plan::Plan;
 use crate::policy::copyspace::CopySpace;
 use crate::policy::gc_work::{TraceKind, TRACE_KIND_TRANSITIVE_PIN};
+use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::scheduler::*;
 use crate::util::copy::CopySemantics;
@@ -28,6 +29,10 @@ pub struct CommonGenPlan<VM: VMBinding> {
     #[space]
     #[copy_semantics(CopySemantics::PromoteToMature)]
     pub nursery: CopySpace<VM>,
+    /// The large object space. Not part of `CommonPlan` because its concrete type can differ
+    /// per plan (e.g. LXR uses its own ref-counting flavor).
+    #[space]
+    pub los: LargeObjectSpace<VM>,
     /// The common plan.
     #[parent]
     pub common: CommonPlan<VM>,
@@ -48,10 +53,17 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
             .global_args
             .stats
             .new_event_counter("majorGC", true, true);
+        let needs_log_bit = args.constraints.needs_log_bit;
+        let los = LargeObjectSpace::new(
+            args.get_mixed_age_space_args("los", true, false, VMRequest::discontiguous()),
+            false,
+            needs_log_bit,
+        );
         let common = CommonPlan::new(args);
 
         CommonGenPlan {
             nursery,
+            los,
             common,
             gc_full_heap: AtomicBool::default(),
             next_gc_full_heap: AtomicBool::new(false),
@@ -66,6 +78,7 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
             self.full_heap_gc_count.lock().unwrap().inc();
         }
         self.common.prepare(tls, full_heap);
+        self.los.prepare(full_heap);
         self.nursery.prepare(true);
         self.nursery
             .set_copy_for_sft_trace(Some(CopySemantics::PromoteToMature));
@@ -75,6 +88,7 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
     pub fn release(&mut self, tls: VMWorkerThread) {
         let full_heap = !self.is_current_gc_nursery();
         self.common.release(tls, full_heap);
+        self.los.release(full_heap);
         self.nursery.release();
     }
 
@@ -229,8 +243,8 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
             );
         }
         // We may alloc large object into LOS as nursery objects. Trace them here.
-        if self.common.get_los().in_space(object) {
-            return self.common.get_los().trace_object::<Q>(queue, object);
+        if self.los.in_space(object) {
+            return self.los.trace_object::<Q>(queue, object);
         }
 
         object
@@ -275,7 +289,7 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
     /// Get pages used by a generational plan. A generational plan should add their own used pages
     /// with the value returned by this method.
     pub fn get_used_pages(&self) -> usize {
-        self.nursery.reserved_pages() + self.common.get_used_pages()
+        self.nursery.reserved_pages() + self.los.reserved_pages() + self.common.get_used_pages()
     }
 }
 

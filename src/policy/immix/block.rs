@@ -236,9 +236,12 @@ impl Block {
         byte as usize
     }
 
-    /// Initialize a clean block after acquired from page-resource.
-    pub fn init<VM: VMBinding>(&self, copy: bool, reuse: bool, space: &ImmixSpace<VM>) {
-        if space.rc_enabled {
+    /// Initialize a clean block after acquired from page-resource. `rc_enabled` distinguishes
+    /// LXR's ref-counting block-state protocol from the generic tracing one; it is a plain flag
+    /// (not a space reference) because this method is shared by both `ImmixSpace` and
+    /// `LXRImmixSpace`, and neither regime needs anything else from the space here.
+    pub fn init(&self, copy: bool, reuse: bool, rc_enabled: bool) {
+        if rc_enabled {
             if !reuse {
                 debug_assert_eq!(self.get_state(), BlockState::Unallocated);
             }
@@ -269,9 +272,9 @@ impl Block {
     }
 
     /// Deinitalize a block before releasing.
-    pub fn deinit<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+    pub fn deinit(&self, rc_enabled: bool) {
         self.set_state(BlockState::Unallocated);
-        if space.rc_enabled {
+        if rc_enabled {
             self.set_as_defrag_source(false);
         }
     }
@@ -399,9 +402,6 @@ impl Block {
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
     ) -> BlockSweepResult {
-        // This method is not called when using RC.
-        assert!(!space.rc_enabled);
-
         self.set_as_defrag_source(false);
         if super::BLOCK_ONLY {
             match self.get_state() {

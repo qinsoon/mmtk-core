@@ -20,7 +20,7 @@ use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::ImmixSpaceArgs;
-use crate::policy::largeobjectspace::LargeObjectSpace;
+use crate::policy::lxr::{LXRImmixSpace, LXRLargeObjectSpace};
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::util::alloc::allocators::AllocatorSelector;
@@ -38,7 +38,7 @@ use crate::util::{metadata, Address, ObjectReference};
 use crate::vm::ActivePlan;
 use crate::vm::{Collection, ObjectModel, VMBinding};
 use crate::BarrierSelector;
-use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
+use crate::util::opaque_pointer::VMWorkerThread;
 use crate::{scheduler::*, MMTK};
 use atomic::{Atomic, Ordering};
 use crossbeam::queue::SegQueue;
@@ -58,7 +58,9 @@ pub struct LXR<VM: VMBinding> {
     #[post_scan]
     #[space]
     #[copy_semantics(CopySemantics::DefaultCopy)]
-    pub immix_space: ImmixSpace<VM>,
+    pub immix_space: LXRImmixSpace<VM>,
+    #[space]
+    pub los: LXRLargeObjectSpace<VM>,
     #[parent]
     pub common: CommonPlan<VM>,
     /// Always true for non-rc immix.
@@ -187,13 +189,14 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     fn prepare(&mut self, tls: VMWorkerThread) {
         let pause = self.current_pause().unwrap();
         if pause == Pause::FinalMark || pause == Pause::Full {
-            self.common.los.is_end_of_satb_or_full_gc = true;
+            self.los.is_end_of_satb_or_full_gc = true;
             // release nursery memory before mature evacuation, to reduce the chance of to-space overflow.
             self.immix_space.scheduler().work_buckets[WorkBucketStage::Unconstrained]
                 .add(ReleaseLOSNursery);
         }
-        self.common
-            .prepare(tls, pause == Pause::Full || pause == Pause::InitialMark);
+        let major_gc = pause == Pause::Full || pause == Pause::InitialMark;
+        self.common.prepare(tls, major_gc);
+        self.los.prepare(major_gc);
         if super::MATURE_EVACUATION && (pause == Pause::FinalMark || pause == Pause::Full) {
             self.process_mature_evacuation_remset();
         }
@@ -215,9 +218,10 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             VM::VMCollection::update_weak_processor(false);
         }
         <VM as VMBinding>::VMCollection::vm_release();
-        self.common.los.is_end_of_satb_or_full_gc = false;
-        self.common
-            .release(tls, pause == Pause::Full || pause == Pause::FinalMark);
+        self.los.is_end_of_satb_or_full_gc = false;
+        let major_gc = pause == Pause::Full || pause == Pause::FinalMark;
+        self.common.release(tls, major_gc);
+        self.los.release(major_gc);
         self.block_allocation
             .sweep_nursery_blocks(self.immix_space.scheduler(), pause);
         self.block_allocation.sweep_mutator_reused_blocks(pause);
@@ -249,7 +253,13 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn get_used_pages(&self) -> usize {
-        self.immix_space.reserved_pages() + self.common.get_used_pages()
+        self.immix_space.reserved_pages()
+            + self.los.reserved_pages()
+            + self.common.get_used_pages()
+    }
+
+    fn get_los(&self) -> Option<&dyn Space<Self::VM>> {
+        Some(&self.los)
     }
 
     fn base(&self) -> &BasePlan<VM> {
@@ -377,15 +387,22 @@ impl<VM: VMBinding> LXR<VM> {
             constraints: &LXR_CONSTRAINTS,
             global_side_metadata_specs,
         };
-        let immix_space = ImmixSpace::new(
+        let immix_space = LXRImmixSpace::new(
             plan_args.get_mature_space_args("immix", true, false, VMRequest::discontiguous()),
             ImmixSpaceArgs {
                 never_move_objects: false,
                 mixed_age: false,
             },
         );
+        let needs_log_bit = plan_args.constraints.needs_log_bit;
+        let los = LXRLargeObjectSpace::new(
+            plan_args.get_normal_space_args("los", true, false, VMRequest::discontiguous()),
+            false,
+            needs_log_bit,
+        );
         let mut lxr = Box::new(LXR {
             immix_space,
+            los,
             common: CommonPlan::new(plan_args),
             perform_cycle_collection: AtomicBool::new(false),
             hint_cycle_gc: AtomicBool::new(false),
@@ -426,7 +443,7 @@ impl<VM: VMBinding> LXR<VM> {
 
     /// Generate chunk sweep work packets.
     fn generate_dead_cycle_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
-        self.immix_space.chunk_map.generate_tasks_batched(
+        self.immix_space.chunk_map().generate_tasks_batched(
             self.immix_space.scheduler().num_workers(),
             |chunks| {
                 Box::new(SweepDeadCycles::new(
@@ -463,7 +480,7 @@ impl<VM: VMBinding> LXR<VM> {
     /// Generate chunk sweep work packets.
     fn generate_full_trace_prepare_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
         self.immix_space
-            .chunk_map
+            .chunk_map()
             .generate_tasks_batched(self.immix_space.scheduler().num_workers(), |chunks| {
                 Box::new(PrepareChunksForFullGC { chunks })
             })
@@ -547,7 +564,7 @@ impl<VM: VMBinding> LXR<VM> {
         // Calculate mature space size
         let total_pages = self.get_total_pages();
         let mature_space_pages = {
-            let released_los_pages = self.los().num_pages_released_lazy.load(Ordering::SeqCst);
+            let released_los_pages = self.los().num_pages_released_lazy();
             HEAP_AFTER_GC
                 .load(Ordering::SeqCst)
                 .saturating_sub(
@@ -579,7 +596,7 @@ impl<VM: VMBinding> LXR<VM> {
         }
         let work_packets = self
             .immix_space
-            .chunk_map
+            .chunk_map()
             .generate_tasks_batched(self.immix_space.scheduler().num_workers(), |chunks| {
                 Box::new(ConcurrentChunkMetadataZeroing { chunks })
             });
@@ -758,7 +775,7 @@ impl<VM: VMBinding> LXR<VM> {
         if self.immix_space.in_space(o) {
             self.immix_space.attempt_mark(o)
         } else {
-            self.common.los.attempt_mark(o)
+            self.los.attempt_mark(o)
         }
     }
 
@@ -766,12 +783,12 @@ impl<VM: VMBinding> LXR<VM> {
         if self.immix_space.in_space(o) {
             self.immix_space.is_marked(o)
         } else {
-            self.common.los.is_marked(o)
+            self.los.is_marked(o)
         }
     }
 
-    pub const fn los(&self) -> &LargeObjectSpace<VM> {
-        &self.common.los
+    pub const fn los(&self) -> &LXRLargeObjectSpace<VM> {
+        &self.los
     }
 
     fn on_lazy_decs_finished(&self, c: LazySweepingJobsCounter) {
@@ -792,8 +809,6 @@ impl<VM: VMBinding> LXR<VM> {
     }
 
     fn gc_init(&mut self) {
-        self.immix_space.rc_enabled = true;
-        self.common.los.rc_enabled = true;
         unsafe {
             let me: &'static Self = &*(self as *const Self);
             me.block_allocation.init(&me.immix_space, me);
@@ -814,8 +829,7 @@ impl<VM: VMBinding> LXR<VM> {
 
     fn set_concurrent_marking_state(&self, active: bool) {
         self.in_concurrent_marking.store(active, Ordering::SeqCst);
-        self.common
-            .los
+        self.los
             .bump_page_reuse_count
             .store(active, Ordering::SeqCst);
     }

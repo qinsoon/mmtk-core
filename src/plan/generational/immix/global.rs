@@ -204,6 +204,10 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
         &self.gen.common
     }
 
+    fn get_los(&self) -> Option<&dyn Space<Self::VM>> {
+        Some(&self.gen.los)
+    }
+
     fn generational(&self) -> Option<&dyn GenerationalPlan<VM = VM>> {
         Some(self)
     }

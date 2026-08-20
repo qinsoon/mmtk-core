@@ -11,6 +11,7 @@ use crate::plan::tracing::gc_work::weakref::{
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
+use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::lisp2space::Lisp2Space;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
@@ -34,6 +35,8 @@ pub struct Lisp2<VM: VMBinding> {
     #[space]
     #[copy_semantics(CopySemantics::DefaultCopy)]
     pub lisp2_space: Lisp2Space<VM>,
+    #[space]
+    pub los: LargeObjectSpace<VM>,
     #[parent]
     pub common: CommonPlan<VM>,
 }
@@ -70,12 +73,18 @@ impl<VM: VMBinding> Plan for Lisp2<VM> {
 
     fn prepare(&mut self, _tls: VMWorkerThread) {
         self.common.prepare(_tls, true);
+        self.los.prepare(true);
         self.lisp2_space.prepare();
     }
 
     fn release(&mut self, _tls: VMWorkerThread) {
         self.common.release(_tls, true);
+        self.los.release(true);
         self.lisp2_space.release();
+    }
+
+    fn get_los(&self) -> Option<&dyn Space<Self::VM>> {
+        Some(&self.los)
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
@@ -165,7 +174,9 @@ impl<VM: VMBinding> Plan for Lisp2<VM> {
     }
 
     fn get_used_pages(&self) -> usize {
-        self.lisp2_space.reserved_pages() + self.common.get_used_pages()
+        self.lisp2_space.reserved_pages()
+            + self.los.reserved_pages()
+            + self.common.get_used_pages()
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
@@ -195,15 +206,22 @@ impl<VM: VMBinding> Lisp2<VM> {
             global_side_metadata_specs,
         };
 
+        let needs_log_bit = plan_args.constraints.needs_log_bit;
         let lisp2_space = Lisp2Space::new(plan_args.get_normal_space_args(
             "lisp2",
             true,
             false,
             VMRequest::discontiguous(),
         ));
+        let los = LargeObjectSpace::new(
+            plan_args.get_normal_space_args("los", true, false, VMRequest::discontiguous()),
+            false,
+            needs_log_bit,
+        );
 
         Lisp2 {
             lisp2_space,
+            los,
             common: CommonPlan::new(plan_args),
         }
     }

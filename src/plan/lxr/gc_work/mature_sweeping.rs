@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 use crate::plan::lxr::{LazySweepingJobsCounter, LXR};
 use crate::policy::immix::block::{Block, BlockState};
 use crate::policy::immix::line::Line;
-use crate::policy::immix::ImmixSpace;
+use crate::policy::lxr::LXRImmixSpace;
 use crate::scheduler::{GCWork, GCWorker};
 use crate::util::heap::chunk_map::Chunk;
 use crate::util::linear_scan::Region;
@@ -49,7 +49,7 @@ impl<VM: VMBinding> SweepDeadCycles<VM> {
         self.rc.set(o, 0);
     }
 
-    fn process_block(&mut self, block: Block, lxr: &LXR<VM>, immix_space: &ImmixSpace<VM>) {
+    fn process_block(&mut self, block: Block, lxr: &LXR<VM>, immix_space: &LXRImmixSpace<VM>) {
         let mut has_dead_object = false;
         let mut has_live = false;
         let mut cursor = block.start();
@@ -93,7 +93,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepDeadCycles<VM> {
             .immix_space;
         for i in 0..num_chunks {
             let chunk = self.chunks.start.next_nth(i);
-            if !ix_space.chunk_map.is_allocated(chunk) {
+            if !ix_space.chunk_map().is_allocated(chunk) {
                 continue;
             }
 
@@ -123,7 +123,8 @@ impl RCSweepMatureAfterSATBLOS {
 
 impl<VM: VMBinding> GCWork<VM> for RCSweepMatureAfterSATBLOS {
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let los = mmtk.get_plan().common().get_los();
+        let lxr = mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
+        let los = lxr.los();
         los.sweep_rc_mature_objects_after_satb(&|o| los.is_marked(o) || los.rc.count(o) == 0);
     }
 }

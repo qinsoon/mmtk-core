@@ -1,7 +1,6 @@
 use std::mem::{offset_of, MaybeUninit};
 use std::sync::Arc;
 
-use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::marksweepspace::malloc_ms::MallocSpace;
 use crate::policy::marksweepspace::native_ms::MarkSweepSpace;
 use crate::policy::space::Space;
@@ -118,11 +117,11 @@ impl<VM: VMBinding> Allocators<VM> {
                     ));
                 }
                 AllocatorSelector::LargeObject(index) => {
-                    ret.large_object[index as usize].write(LargeObjectAllocator::new(
-                        mutator_tls.0,
-                        space.downcast_ref::<LargeObjectSpace<VM>>().unwrap(),
-                        context.clone(),
-                    ));
+                    // `LargeObjectAllocator` resolves the concrete space (tracing
+                    // `LargeObjectSpace` or LXR's `LXRLargeObjectSpace`) itself, so no downcast
+                    // here.
+                    ret.large_object[index as usize]
+                        .write(LargeObjectAllocator::new(mutator_tls.0, space, context.clone()));
                 }
                 AllocatorSelector::Malloc(index) => {
                     ret.malloc[index as usize].write(MallocAllocator::new(

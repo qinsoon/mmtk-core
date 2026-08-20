@@ -27,6 +27,8 @@ pub mod immortalspace;
 pub mod largeobjectspace;
 pub mod lisp2space;
 pub mod lockfreeimmortalspace;
+/// Ref-counting (LXR) flavors of the [`immix`] and [`largeobjectspace`] policies.
+pub mod lxr;
 pub mod marksweepspace;
 pub mod ovc;
 #[cfg(feature = "vm_space")]

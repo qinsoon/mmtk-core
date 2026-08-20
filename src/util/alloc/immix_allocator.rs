@@ -1,10 +1,9 @@
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap, AllocatorContext};
 use super::BumpPointer;
 use crate::policy::immix::line::*;
-use crate::policy::immix::ImmixSpace;
+use crate::policy::immix::{ImmixSpace, ImmixSpaceExt};
 use crate::policy::space::Space;
 use crate::util::alloc::allocator::get_maximum_aligned_size;
 use crate::util::alloc::Allocator;
@@ -22,7 +21,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// The fastpath bump pointer.
     pub bump_pointer: BumpPointer,
     /// [`Space`](src/policy/space/Space) instance associated with this allocator instance.
-    space: &'static ImmixSpace<VM>,
+    space: &'static dyn ImmixSpaceExt<VM>,
     context: Arc<AllocatorContext<VM>>,
     /// *unused*
     hot: bool,
@@ -47,7 +46,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
 impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
     fn get_space(&self) -> &'static dyn Space<VM> {
-        self.space as _
+        self.space.as_space()
     }
 
     fn get_context(&self) -> &AllocatorContext<VM> {
@@ -173,9 +172,22 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         context: Arc<AllocatorContext<VM>>,
         copy: bool,
     ) -> Self {
+        let space = space.unwrap();
+        // `ImmixAllocator` targets either the generic tracing `ImmixSpace` or LXR's
+        // ref-counting `LXRImmixSpace`. Both implement `ImmixSpaceExt`; resolve the concrete
+        // type once here so the rest of the allocator is written purely against the trait.
+        let space: &'static dyn ImmixSpaceExt<VM> =
+            if let Some(s) = space.downcast_ref::<ImmixSpace<VM>>() {
+                s
+            } else {
+                panic!(
+                    "ImmixAllocator::new: space {} is neither ImmixSpace nor LXRImmixSpace",
+                    space.get_name()
+                )
+            };
         ImmixAllocator {
             tls,
-            space: space.unwrap().downcast_ref::<ImmixSpace<VM>>().unwrap(),
+            space,
             context,
             bump_pointer: BumpPointer::default(),
             hot: false,
@@ -186,7 +198,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
-    pub(crate) fn immix_space(&self) -> &'static ImmixSpace<VM> {
+    pub(crate) fn immix_space(&self) -> &'static dyn ImmixSpaceExt<VM> {
         self.space
     }
 
@@ -267,11 +279,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     // Update the hole-searching cursor to None.
                     Some(end_line)
                 };
-                // mark objects if concurrent marking is active
-                if self.immix_space().should_allocate_as_live() {
-                    let state = self.space.line_mark_state.load(Ordering::Acquire);
-                    Line::eager_mark_lines::<VM>(state, start_line..end_line);
-                }
+                self.immix_space()
+                    .eagerly_mark_new_lines(start_line, end_line);
                 return true;
             } else {
                 // No more recyclable lines. Set the hole-searching cursor to None.
@@ -309,17 +318,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.start(),
                     block.end()
                 );
-                // FIXME: Why don't we need this for LXR? Conix needs this.
-                if !self.immix_space().rc_enabled {
-                    // Bulk clear stale line mark state
-                    Line::MARK_TABLE
-                        .bzero_metadata(block.start(), crate::policy::immix::block::Block::BYTES);
-                    // mark objects if concurrent marking is active
-                    if self.immix_space().should_allocate_as_live() {
-                        let state = self.space.line_mark_state.load(Ordering::Acquire);
-                        Line::eager_mark_lines::<VM>(state, block.start_line()..block.end_line());
-                    }
-                }
+                self.immix_space().prepare_new_clean_block_for_allocator(block);
                 if self.request_for_large {
                     self.large_bump_pointer.cursor = block.start();
                     self.large_bump_pointer.limit = block.end();

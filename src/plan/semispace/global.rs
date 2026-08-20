@@ -7,6 +7,7 @@ use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::copyspace::CopySpace;
+use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
@@ -31,6 +32,8 @@ pub struct SemiSpace<VM: VMBinding> {
     #[space]
     #[copy_semantics(CopySemantics::DefaultCopy)]
     pub copyspace1: CopySpace<VM>,
+    #[space]
+    pub los: LargeObjectSpace<VM>,
     #[parent]
     pub common: CommonPlan<VM>,
 }
@@ -73,6 +76,7 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
 
     fn prepare(&mut self, tls: VMWorkerThread) {
         self.common.prepare(tls, true);
+        self.los.prepare(true);
 
         self.hi
             .store(!self.hi.load(Ordering::SeqCst), Ordering::SeqCst); // flip the semi-spaces
@@ -91,6 +95,7 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
 
     fn release(&mut self, tls: VMWorkerThread) {
         self.common.release(tls, true);
+        self.los.release(true);
         // release the collected region
         self.fromspace().release();
     }
@@ -108,7 +113,11 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
     }
 
     fn get_used_pages(&self) -> usize {
-        self.tospace().reserved_pages() + self.common.get_used_pages()
+        self.tospace().reserved_pages() + self.los.reserved_pages() + self.common.get_used_pages()
+    }
+
+    fn get_los(&self) -> Option<&dyn Space<Self::VM>> {
+        Some(&self.los)
     }
 
     fn get_available_pages(&self) -> usize {
@@ -142,6 +151,7 @@ impl<VM: VMBinding> SemiSpace<VM> {
             constraints: &SS_CONSTRAINTS,
             global_side_metadata_specs: SideMetadataContext::new_global_specs(&[]),
         };
+        let needs_log_bit = plan_args.constraints.needs_log_bit;
 
         SemiSpace {
             hi: AtomicBool::new(false),
@@ -162,6 +172,11 @@ impl<VM: VMBinding> SemiSpace<VM> {
                     VMRequest::discontiguous(),
                 ),
                 true,
+            ),
+            los: LargeObjectSpace::new(
+                plan_args.get_normal_space_args("los", true, false, VMRequest::discontiguous()),
+                false,
+                needs_log_bit,
             ),
             common: CommonPlan::new(plan_args),
         }

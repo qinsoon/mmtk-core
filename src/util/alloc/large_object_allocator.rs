@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::policy::largeobjectspace::LargeObjectSpace;
+use crate::policy::largeobjectspace::{LargeObjectSpace, LargeObjectSpaceExt};
 use crate::policy::space::Space;
 use crate::util::alloc::{allocator, Allocator};
 use crate::util::opaque_pointer::*;
@@ -16,7 +16,7 @@ pub struct LargeObjectAllocator<VM: VMBinding> {
     /// [`VMThread`] associated with this allocator instance
     pub tls: VMThread,
     /// [`Space`](src/policy/space/Space) instance associated with this allocator instance.
-    space: &'static LargeObjectSpace<VM>,
+    space: &'static dyn LargeObjectSpaceExt<VM>,
     context: Arc<AllocatorContext<VM>>,
 }
 
@@ -30,8 +30,7 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
     }
 
     fn get_space(&self) -> &'static dyn Space<VM> {
-        // Casting the interior of the Option: from &LargeObjectSpace to &dyn Space
-        self.space as &'static dyn Space<VM>
+        self.space.as_space()
     }
 
     fn does_thread_local_allocation(&self) -> bool {
@@ -67,9 +66,26 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
 impl<VM: VMBinding> LargeObjectAllocator<VM> {
     pub(crate) fn new(
         tls: VMThread,
-        space: &'static LargeObjectSpace<VM>,
+        space: &'static dyn Space<VM>,
         context: Arc<AllocatorContext<VM>>,
     ) -> Self {
+        // `LargeObjectAllocator` targets either the generic tracing `LargeObjectSpace` or LXR's
+        // ref-counting `LXRLargeObjectSpace`. Both implement `LargeObjectSpaceExt`; resolve the
+        // concrete type once here so the rest of the allocator is written purely against the
+        // trait (mirrors `ImmixAllocator::new`).
+        let space: &'static dyn LargeObjectSpaceExt<VM> =
+            if let Some(s) = space.downcast_ref::<LargeObjectSpace<VM>>() {
+                s
+            } else if let Some(s) =
+                space.downcast_ref::<crate::policy::lxr::LXRLargeObjectSpace<VM>>()
+            {
+                s
+            } else {
+                panic!(
+                    "LargeObjectAllocator::new: space {} is neither LargeObjectSpace nor LXRLargeObjectSpace",
+                    space.get_name()
+                )
+            };
         LargeObjectAllocator {
             tls,
             space,

@@ -5,7 +5,6 @@ use crate::plan::PlanConstraints;
 use crate::policy::copy_context::PolicyCopyContext;
 use crate::policy::copyspace::CopySpace;
 use crate::policy::copyspace::CopySpaceCopyContext;
-use crate::policy::immix::ImmixSpace;
 use crate::policy::immix::{ImmixCopyContext, ImmixHybridCopyContext};
 use crate::policy::space::Space;
 use crate::util::object_forwarding;
@@ -198,17 +197,19 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
                     ));
                 }
                 CopySelector::Immix(index) => {
+                    // `ImmixCopyContext` resolves the concrete space (tracing `ImmixSpace` or
+                    // LXR's `LXRImmixSpace`) itself via `ImmixAllocator::new`, so no downcast here.
                     ret.immix[index as usize].write(ImmixCopyContext::new(
                         worker_tls,
                         context.clone(),
-                        space.downcast_ref::<ImmixSpace<VM>>().unwrap(),
+                        space,
                     ));
                 }
                 CopySelector::ImmixHybrid(index) => {
                     ret.immix_hybrid[index as usize].write(ImmixHybridCopyContext::new(
                         worker_tls,
                         context.clone(),
-                        space.downcast_ref::<ImmixSpace<VM>>().unwrap(),
+                        space,
                     ));
                 }
                 CopySelector::Unused => unreachable!(),
