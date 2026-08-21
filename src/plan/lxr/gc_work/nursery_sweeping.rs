@@ -27,7 +27,7 @@ impl<VM: VMBinding> GCWork<VM> for RCLazySweepNurseryBlocks {
         let lxr = &mmtk.get_plan().downcast_ref::<LXR<VM>>().unwrap();
         let mut released_blocks = 0;
         for block in &self.blocks {
-            if block.rc_sweep_nursery(lxr.immix_space.inner()) {
+            if block.rc_sweep_nursery(&lxr.immix_space) {
                 released_blocks += 1;
             }
         }
@@ -58,7 +58,7 @@ impl<VM: VMBinding> GCWork<VM> for RCSTWSweepNurseryBlocks {
             .unwrap()
             .immix_space;
         for block in &self.blocks {
-            block.rc_sweep_nursery(space.inner());
+            block.rc_sweep_nursery(space);
         }
     }
 }
@@ -86,7 +86,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepBlocksAfterDecs {
         let mut count = 0;
         for (block, defrag) in &self.blocks {
             block.unlog();
-            if block.rc_sweep_mature::<VM>(lxr.immix_space.inner(), *defrag) {
+            if block.rc_sweep_mature::<VM>(&lxr.immix_space, *defrag) {
                 count += 1;
             } else {
                 assert!(

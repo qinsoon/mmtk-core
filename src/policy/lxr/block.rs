@@ -17,7 +17,7 @@ use crate::policy::immix::block::{Block, BlockState};
 #[cfg(feature = "vo_bit")]
 use crate::policy::immix::line::Line;
 use crate::policy::immix::line::RCArray;
-use crate::policy::immix::ImmixSpace;
+use crate::policy::lxr::LXRSpace;
 use crate::util::linear_scan::Region;
 use crate::util::metadata::side_metadata::*;
 use crate::vm::*;
@@ -35,8 +35,8 @@ pub trait LXRBlockExt {
     fn rc_dead(&self) -> bool;
     fn has_holes(&self) -> bool;
     fn attempt_mutator_reuse(&self) -> bool;
-    fn rc_sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool;
-    fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool;
+    fn rc_sweep_nursery<VM: VMBinding>(&self, space: &LXRSpace<VM>) -> bool;
+    fn rc_sweep_mature<VM: VMBinding>(&self, space: &LXRSpace<VM>, defrag: bool) -> bool;
 }
 
 impl LXRBlockExt for Block {
@@ -162,7 +162,7 @@ impl LXRBlockExt for Block {
         .is_ok()
     }
 
-    fn rc_sweep_nursery<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> bool {
+    fn rc_sweep_nursery<VM: VMBinding>(&self, space: &LXRSpace<VM>) -> bool {
         let is_in_place_promoted = self.is_in_place_promoted();
         self.clear_in_place_promoted();
         if is_in_place_promoted {
@@ -184,7 +184,7 @@ impl LXRBlockExt for Block {
                 }
             }
 
-            space.reusable_blocks.push(*self);
+            space.inner().reusable_blocks.push(*self);
             false
         } else {
             debug_assert!(self.rc_dead(), "{:?} has non-zero rc value", self);
@@ -196,12 +196,12 @@ impl LXRBlockExt for Block {
             #[cfg(feature = "vo_bit")]
             crate::util::metadata::vo_bit::bzero_vo_bit(self.start(), Self::BYTES);
 
-            space.release_block(*self, false);
+            space.inner().release_block(*self, false);
             true
         }
     }
 
-    fn rc_sweep_mature<VM: VMBinding>(&self, space: &ImmixSpace<VM>, defrag: bool) -> bool {
+    fn rc_sweep_mature<VM: VMBinding>(&self, space: &LXRSpace<VM>, defrag: bool) -> bool {
         if self.get_state() == BlockState::Unallocated || self.get_state() == BlockState::Nursery {
             return false;
         }
@@ -215,7 +215,7 @@ impl LXRBlockExt for Block {
                 #[cfg(feature = "vo_bit")]
                 crate::util::metadata::vo_bit::bzero_vo_bit(self.start(), Self::BYTES);
 
-                space.release_block(*self, true);
+                space.inner().release_block(*self, true);
                 return true;
             }
         } else if !crate::policy::immix::BLOCK_ONLY {
@@ -254,7 +254,7 @@ impl LXRBlockExt for Block {
                         }
                     }
                 }
-                space.reusable_blocks.push(*self);
+                space.inner().reusable_blocks.push(*self);
             }
         }
         false

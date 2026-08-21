@@ -146,7 +146,7 @@ impl MatureEvacuationSet {
             }
             block.clear_rc_table();
             block.clear_striddle_table();
-            block.rc_sweep_mature::<VM>(space.inner(), true);
+            block.rc_sweep_mature::<VM>(space, true);
             assert!(!block.is_defrag_source());
         }
     }

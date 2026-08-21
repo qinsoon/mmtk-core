@@ -143,7 +143,7 @@ impl<VM: VMBinding> BlockAllocation<VM> {
             for b in &blocks[0..stw_limit] {
                 let block = b.load(Ordering::Relaxed);
                 debug_assert_ne!(block.get_state(), BlockState::Unallocated);
-                block.rc_sweep_nursery(space.inner());
+                block.rc_sweep_nursery(space);
             }
             if total_nursery_blocks > stw_limit {
                 let packets = blocks[stw_limit..total_nursery_blocks]
