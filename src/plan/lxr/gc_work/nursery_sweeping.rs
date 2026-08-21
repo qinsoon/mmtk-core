@@ -2,6 +2,7 @@ use atomic::Ordering;
 
 use crate::plan::lxr::{LazySweepingJobsCounter, LXR};
 use crate::policy::immix::block::Block;
+use crate::policy::lxr::LXRBlockExt;
 use crate::scheduler::WorkBucketStage;
 use crate::scheduler::{GCWork, GCWorker};
 use crate::vm::VMBinding;

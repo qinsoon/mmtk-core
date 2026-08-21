@@ -5,8 +5,10 @@
 //! reusing the inner space's block/chunk/page-resource/treadmill machinery rather than
 //! duplicating it.
 
+pub mod block;
 pub mod immixspace;
 pub mod largeobjectspace;
 
+pub use block::LXRBlockExt;
 pub use immixspace::{ImmixHooks, LXRSpace};
 pub use largeobjectspace::LXRLargeObjectSpace;

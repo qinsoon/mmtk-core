@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use super::tracing::LXRStopTheWorldProcessEdges;
 use crate::plan::lxr::mature_evac::MatureEvacuationSet;
 use crate::policy::immix::line::Line;
+use crate::policy::lxr::LXRBlockExt;
 use crate::util::heap::chunk_map::Chunk;
 use crate::util::linear_scan::Region;
 use crate::util::metadata::side_metadata::spec_defs::{IX_LINE_REUSE_COUNT, LOS_PAGE_REUSE_COUNT};

@@ -7,6 +7,7 @@ use crate::policy::gc_work::{PolicyTraceObject, TraceKind};
 use crate::policy::immix::block::Block;
 use crate::policy::immix::line::{Line, RCArray};
 use crate::policy::immix::{ImmixSpace, ImmixSpaceArgs, ImmixSpaceExt};
+use crate::policy::lxr::block::LXRBlockExt;
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
 use crate::policy::sft_map::SFTMap;

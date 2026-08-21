@@ -19,7 +19,7 @@ use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::ImmixSpaceArgs;
-use crate::policy::lxr::{LXRSpace, LXRLargeObjectSpace};
+use crate::policy::lxr::{LXRBlockExt, LXRSpace, LXRLargeObjectSpace};
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::util::alloc::allocators::AllocatorSelector;

@@ -3,7 +3,7 @@ use super::LXR;
 use crate::plan::concurrent::global::ConcurrentPlan;
 use crate::plan::concurrent::Pause;
 use crate::policy::immix::block::{Block, BlockState};
-use crate::policy::lxr::{ImmixHooks, LXRSpace};
+use crate::policy::lxr::{LXRBlockExt, ImmixHooks, LXRSpace};
 use crate::scheduler::{GCWork, GCWorkScheduler, WorkBucketStage};
 use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::linear_scan::Region;

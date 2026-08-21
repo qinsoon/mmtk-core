@@ -7,7 +7,7 @@ use crate::plan::lxr::gc_work::mature_evac::SelectDefragBlocks;
 use crate::plan::lxr::gc_work::mature_evac::SELECT_DEFRAG_BLOCK_JOB_COUNTER;
 use crate::policy::immix::block::{Block, BlockState};
 use crate::policy::immix::line::Line;
-use crate::policy::lxr::LXRSpace;
+use crate::policy::lxr::{LXRBlockExt, LXRSpace};
 use crate::policy::space::Space;
 use crate::scheduler::WorkBucketStage;
 use crate::util::linear_scan::Region;

@@ -284,7 +284,9 @@ pub struct RCArray {
 impl RCArray {
     pub fn of(block: Block) -> Self {
         Self {
-            table: unsafe { &*block.rc_table_start().to_ptr() },
+            table: unsafe {
+                &*address_to_meta_address(&rc::RC_TABLE, block.start()).to_ptr()
+            },
         }
     }
 
