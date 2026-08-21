@@ -88,10 +88,6 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
         self.immix.common()
     }
 
-    fn get_los(&self) -> Option<&dyn Space<Self::VM>> {
-        self.immix.get_los()
-    }
-
     fn schedule_collection(&'static self, scheduler: &crate::scheduler::GCWorkScheduler<Self::VM>) {
         let is_full_heap = self.requires_full_heap_collection();
         self.gc_full_heap.store(is_full_heap, Ordering::SeqCst);
@@ -130,7 +126,7 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
                 // because ProcessModBuf will set the unlog bits back.
                 UnlogBitsOperation::NoOp,
             );
-            self.immix.los.prepare(false);
+            self.immix.common.los.prepare(false);
         } else {
             self.full_heap_gc_count.lock().unwrap().inc();
             self.immix.prepare_inner(
@@ -149,7 +145,7 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
                 // because ProcessModBuf has set the unlog bits back.
                 UnlogBitsOperation::NoOp,
             );
-            self.immix.los.release(false);
+            self.immix.common.los.release(false);
         } else {
             self.immix.release_inner(
                 tls,
@@ -226,7 +222,9 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
                     object
                 );
                 return false;
-            } else if self.immix.los.in_space(object) && !self.immix.los.is_live(object) {
+            } else if self.immix.common.los.in_space(object)
+                && !self.immix.common.los.is_live(object)
+            {
                 error!("LOS Object {} is not marked", object);
                 return false;
             }
@@ -327,8 +325,12 @@ impl<VM: VMBinding> crate::plan::generational::global::GenerationalPlanExt<VM> f
             }
         }
 
-        if self.immix.los.in_space(object) {
-            return self.immix.los.trace_object::<Q>(queue, object);
+        if self.immix.common().get_los().in_space(object) {
+            return self
+                .immix
+                .common()
+                .get_los()
+                .trace_object::<Q>(queue, object);
         }
 
         object

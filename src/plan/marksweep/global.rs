@@ -7,7 +7,6 @@ use crate::plan::marksweep::mutator::ALLOCATOR_MAPPING;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
-use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::scheduler::GCWorkScheduler;
 use crate::util::alloc::allocators::AllocatorSelector;
@@ -36,8 +35,6 @@ pub struct MarkSweep<VM: VMBinding> {
     common: CommonPlan<VM>,
     #[space]
     ms: MarkSweepSpace<VM>,
-    #[space]
-    los: LargeObjectSpace<VM>,
 }
 
 /// The plan constraints for the mark sweep plan.
@@ -63,12 +60,10 @@ impl<VM: VMBinding> Plan for MarkSweep<VM> {
     fn prepare(&mut self, tls: VMWorkerThread) {
         self.common.prepare(tls, true);
         self.ms.prepare(true);
-        self.los.prepare(true);
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
         self.ms.release();
-        self.los.release(true);
         self.common.release(tls, true);
     }
 
@@ -87,11 +82,7 @@ impl<VM: VMBinding> Plan for MarkSweep<VM> {
     }
 
     fn get_used_pages(&self) -> usize {
-        self.common.get_used_pages() + self.ms.reserved_pages() + self.los.reserved_pages()
-    }
-
-    fn get_los(&self) -> Option<&dyn Space<Self::VM>> {
-        Some(&self.los)
+        self.common.get_used_pages() + self.ms.reserved_pages()
     }
 
     fn base(&self) -> &BasePlan<VM> {
@@ -121,7 +112,6 @@ impl<VM: VMBinding> MarkSweep<VM> {
             constraints: &MS_CONSTRAINTS,
             global_side_metadata_specs,
         };
-        let needs_log_bit = plan_args.constraints.needs_log_bit;
 
         MarkSweep {
             ms: MarkSweepSpace::new(plan_args.get_normal_space_args(
@@ -130,11 +120,6 @@ impl<VM: VMBinding> MarkSweep<VM> {
                 false,
                 VMRequest::discontiguous(),
             )),
-            los: LargeObjectSpace::new(
-                plan_args.get_normal_space_args("los", true, false, VMRequest::discontiguous()),
-                false,
-                needs_log_bit,
-            ),
             common: CommonPlan::new(plan_args),
         }
     }

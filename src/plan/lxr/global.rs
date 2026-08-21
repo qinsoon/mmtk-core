@@ -8,7 +8,6 @@ use super::mutator::ALLOCATOR_MAPPING;
 use super::{LazySweepingJobsCounter, LAZY_SWEEPING_JOBS};
 use crate::plan::concurrent::global::ConcurrentPlan;
 use crate::plan::concurrent::Pause;
-use crate::plan::global::CommonPlan;
 use crate::plan::global::{BasePlan, CreateGeneralPlanArgs, CreateSpecificPlanArgs};
 use crate::plan::lxr::gc_work::mature_sweeping::{RCSweepMatureAfterSATBLOS, SweepDeadCycles};
 use crate::plan::lxr::gc_work::nursery_sweeping::SweepBlocksAfterDecs;
@@ -62,7 +61,7 @@ pub struct LXR<VM: VMBinding> {
     #[space]
     pub los: LXRLargeObjectSpace<VM>,
     #[parent]
-    pub common: CommonPlan<VM>,
+    pub base: BasePlan<VM>,
     /// Always true for non-rc immix.
     /// For RC immix, this is used for enable backup tracing.
     perform_cycle_collection: AtomicBool,
@@ -195,7 +194,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
                 .add(ReleaseLOSNursery);
         }
         let major_gc = pause == Pause::Full || pause == Pause::InitialMark;
-        self.common.prepare(tls, major_gc);
+        self.base.prepare(tls, major_gc);
         self.los.prepare(major_gc);
         if super::MATURE_EVACUATION && (pause == Pause::FinalMark || pause == Pause::Full) {
             self.process_mature_evacuation_remset();
@@ -220,7 +219,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
         <VM as VMBinding>::VMCollection::vm_release();
         self.los.is_end_of_satb_or_full_gc = false;
         let major_gc = pause == Pause::Full || pause == Pause::FinalMark;
-        self.common.release(tls, major_gc);
+        self.base.release(tls, major_gc);
         self.los.release(major_gc);
         self.block_allocation
             .sweep_nursery_blocks(self.immix_space.scheduler(), pause);
@@ -253,30 +252,15 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     }
 
     fn get_used_pages(&self) -> usize {
-        self.immix_space.reserved_pages()
-            + self.los.reserved_pages()
-            + self.common.get_used_pages()
-    }
-
-    fn get_los(&self) -> Option<&dyn Space<Self::VM>> {
-        Some(&self.los)
+        self.immix_space.reserved_pages() + self.los.reserved_pages() + self.base.get_used_pages()
     }
 
     fn base(&self) -> &BasePlan<VM> {
-        &self.common.base
+        &self.base
     }
 
     fn base_mut(&mut self) -> &mut BasePlan<VM> {
-        &mut self.common.base
-    }
-
-    fn common(&self) -> &CommonPlan<VM> {
-        &self.common
-    }
-
-    /// Get a mutable reference to the common plan. See [`Self::common`].
-    fn common_mut(&mut self) -> &mut CommonPlan<Self::VM> {
-        &mut self.common
+        &mut self.base
     }
 
     fn on_pause_start(&self, mmtk: &'static MMTK<Self::VM>) {
@@ -334,7 +318,7 @@ impl<VM: VMBinding> Plan for LXR<VM> {
             .store(self.get_available_pages(), Ordering::SeqCst);
         HEAP_AFTER_GC.store(self.get_reserved_pages(), Ordering::SeqCst);
 
-        self.common_mut().on_pause_end(tls);
+        self.base.on_pause_end(tls);
 
         // Individual RC pauses that don't overlap with concurrent tracing consist of a GC cycle.
         // Concurrent tracing, including RC pauses in between, counts as one GC cycle.
@@ -403,7 +387,7 @@ impl<VM: VMBinding> LXR<VM> {
         let mut lxr = Box::new(LXR {
             immix_space,
             los,
-            common: CommonPlan::new(plan_args),
+            base: BasePlan::new(plan_args),
             perform_cycle_collection: AtomicBool::new(false),
             hint_cycle_gc: AtomicBool::new(false),
             hint_emergency_gc: AtomicBool::new(false),

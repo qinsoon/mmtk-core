@@ -15,7 +15,6 @@ use crate::policy::immix::defrag::StatsForDefrag;
 use crate::policy::immix::ImmixSpaceArgs;
 use crate::policy::immix::TRACE_KIND_DEFRAG;
 use crate::policy::immix::TRACE_KIND_FAST;
-use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::Release;
 use crate::scheduler::gc_work::StopMutators;
@@ -46,8 +45,6 @@ pub struct ConcurrentImmix<VM: VMBinding> {
     #[space]
     #[copy_semantics(CopySemantics::DefaultCopy)]
     pub immix_space: ImmixSpace<VM>,
-    #[space]
-    pub los: LargeObjectSpace<VM>,
     #[parent]
     pub common: CommonPlan<VM>,
     last_gc_was_defrag: AtomicBool,
@@ -188,7 +185,6 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
         match pause {
             Pause::Full => {
                 self.common.prepare(tls, true);
-                self.los.prepare(true);
                 self.immix_space.prepare(
                     true,
                     Some(StatsForDefrag::new(self)),
@@ -205,13 +201,9 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
                 );
 
                 self.common.prepare(tls, true);
-                self.los.prepare(true);
                 // Bulk set log bits so SATB barrier will be triggered on the existing objects.
-                // # Safety: `self.los` is always valid within this collection cycle.
-                let los: &'static dyn Space<VM> =
-                    unsafe { &*(&self.los as *const LargeObjectSpace<VM>) };
                 self.common
-                    .schedule_unlog_bits_op(UnlogBitsOperation::BulkSet, Some(los));
+                    .schedule_unlog_bits_op(UnlogBitsOperation::BulkSet);
             }
             Pause::FinalMark => (),
             Pause::RefCount => unreachable!(),
@@ -230,15 +222,11 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
                 );
 
                 self.common.release(tls, true);
-                self.los.release(true);
 
                 if pause == Pause::FinalMark {
                     // Bulk clear log bits so SATB barrier will not be triggered.
-                    // # Safety: `self.los` is always valid within this collection cycle.
-                    let los: &'static dyn Space<VM> =
-                        unsafe { &*(&self.los as *const LargeObjectSpace<VM>) };
                     self.common
-                        .schedule_unlog_bits_op(UnlogBitsOperation::BulkClear, Some(los));
+                        .schedule_unlog_bits_op(UnlogBitsOperation::BulkClear);
                 } else {
                     // Full pauses didn't set unlog bits in the first place,
                     // so there is no need to clear them.
@@ -288,9 +276,7 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
     }
 
     fn get_used_pages(&self) -> usize {
-        self.immix_space.reserved_pages()
-            + self.los.reserved_pages()
-            + self.common.get_used_pages()
+        self.immix_space.reserved_pages() + self.common.get_used_pages()
     }
 
     fn base(&self) -> &BasePlan<VM> {
@@ -303,10 +289,6 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
 
     fn common(&self) -> &CommonPlan<VM> {
         &self.common
-    }
-
-    fn get_los(&self) -> Option<&dyn Space<Self::VM>> {
-        Some(&self.los)
     }
 
     fn on_pause_start(&self, mmtk: &'static MMTK<VM>) {
@@ -379,16 +361,10 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
         scheduler.work_buckets[WorkBucketStage::FinalizableForwarding].set_enabled(false);
         scheduler.work_buckets[WorkBucketStage::Compact].set_enabled(false);
 
-        let needs_log_bit = plan_args.constraints.needs_log_bit;
         ConcurrentImmix {
             immix_space: ImmixSpace::new(
                 plan_args.get_normal_space_args("immix", true, false, VMRequest::discontiguous()),
                 immix_args,
-            ),
-            los: LargeObjectSpace::new(
-                plan_args.get_normal_space_args("los", true, false, VMRequest::discontiguous()),
-                false,
-                needs_log_bit,
             ),
             common: CommonPlan::new(plan_args),
             last_gc_was_defrag: AtomicBool::new(false),

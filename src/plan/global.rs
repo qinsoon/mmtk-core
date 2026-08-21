@@ -7,6 +7,7 @@ use crate::plan::gc_work::{ClearCommonPlanUnlogBits, SetCommonPlanUnlogBits};
 use crate::plan::tracing::ObjectQueue;
 use crate::plan::Mutator;
 use crate::policy::immortalspace::ImmortalSpace;
+use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::{PlanCreateSpaceArgs, Space};
 #[cfg(feature = "vm_space")]
 use crate::policy::vmspace::VMSpace;
@@ -178,14 +179,6 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     /// Get a mutable reference to the common plan. See [`Self::common`].
     fn common_mut(&mut self) -> &mut CommonPlan<Self::VM> {
         panic!("Common Plan not handled!")
-    }
-
-    /// Get the plan's large object space, if it has one, type-erased as `&dyn Space`. Plans that
-    /// allocate large objects override this to return their own LOS-flavored space (a plain
-    /// `LargeObjectSpace` for most plans, or LXR's ref-counting `LXRLargeObjectSpace`). The LOS
-    /// is not part of `CommonPlan` because its concrete type can differ per plan.
-    fn get_los(&self) -> Option<&dyn Space<Self::VM>> {
-        None
     }
 
     /// Return a reference to `GenerationalPlan` to allow
@@ -764,6 +757,8 @@ pub struct CommonPlan<VM: VMBinding> {
     #[space]
     pub immortal: ImmortalSpace<VM>,
     #[space]
+    pub los: LargeObjectSpace<VM>,
+    #[space]
     #[cfg_attr(
         not(any(feature = "immortal_as_nonmoving", feature = "marksweep_as_nonmoving")),
         post_scan
@@ -775,38 +770,47 @@ pub struct CommonPlan<VM: VMBinding> {
 
 impl<VM: VMBinding> CommonPlan<VM> {
     pub fn new(mut args: CreateSpecificPlanArgs<VM>) -> CommonPlan<VM> {
+        let needs_log_bit = args.constraints.needs_log_bit;
         let generational = args.constraints.generational;
         CommonPlan {
             immortal: ImmortalSpace::new(args.get_common_space_args(generational, "immortal")),
+            los: LargeObjectSpace::new(
+                // LOS is a bit special, as it is a mixed age space. It has a logical nursery.
+                if generational {
+                    args.get_mixed_age_space_args("los", true, false, VMRequest::discontiguous())
+                } else {
+                    args.get_normal_space_args("los", true, false, VMRequest::discontiguous())
+                },
+                false,
+                needs_log_bit,
+            ),
             nonmoving: Self::new_nonmoving_space(&mut args),
             base: BasePlan::new(args),
         }
     }
 
     pub fn get_used_pages(&self) -> usize {
-        self.immortal.reserved_pages() + self.nonmoving.reserved_pages() + self.base.get_used_pages()
+        self.immortal.reserved_pages()
+            + self.los.reserved_pages()
+            + self.nonmoving.reserved_pages()
+            + self.base.get_used_pages()
     }
 
     pub fn prepare(&mut self, tls: VMWorkerThread, full_heap: bool) {
         self.immortal.prepare();
+        self.los.prepare(full_heap);
         self.prepare_nonmoving_space(full_heap);
         self.base.prepare(tls, full_heap)
     }
 
     pub fn release(&mut self, tls: VMWorkerThread, full_heap: bool) {
         self.immortal.release();
+        self.los.release(full_heap);
         self.release_nonmoving_space(full_heap);
         self.base.release(tls, full_heap)
     }
 
-    /// Schedule bulk set/clear of the side log bits for the spaces in `CommonPlan`, plus
-    /// `extra_space` (a plan's own LOS, which is not part of `CommonPlan` since its concrete
-    /// type can differ per plan).
-    pub(crate) fn schedule_unlog_bits_op(
-        &mut self,
-        unlog_bits_op: UnlogBitsOperation,
-        extra_space: Option<&'static dyn Space<VM>>,
-    ) {
+    pub(crate) fn schedule_unlog_bits_op(&mut self, unlog_bits_op: UnlogBitsOperation) {
         if VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.is_on_side() {
             // # Safety: CommonPlan reference is always valid within this collection cycle.
             let common_plan = unsafe { &*(self as *const CommonPlan<VM>) };
@@ -814,20 +818,12 @@ impl<VM: VMBinding> CommonPlan<VM> {
             match unlog_bits_op {
                 UnlogBitsOperation::NoOp => {}
                 UnlogBitsOperation::BulkSet => {
-                    self.base.scheduler.work_buckets[WorkBucketStage::Prepare].add(
-                        SetCommonPlanUnlogBits {
-                            common_plan,
-                            extra_space,
-                        },
-                    );
+                    self.base.scheduler.work_buckets[WorkBucketStage::Prepare]
+                        .add(SetCommonPlanUnlogBits { common_plan });
                 }
                 UnlogBitsOperation::BulkClear => {
-                    self.base.scheduler.work_buckets[WorkBucketStage::Release].add(
-                        ClearCommonPlanUnlogBits {
-                            common_plan,
-                            extra_space,
-                        },
-                    );
+                    self.base.scheduler.work_buckets[WorkBucketStage::Release]
+                        .add(ClearCommonPlanUnlogBits { common_plan });
                 }
             }
         }
@@ -835,11 +831,13 @@ impl<VM: VMBinding> CommonPlan<VM> {
 
     pub fn clear_side_log_bits(&self) {
         self.immortal.clear_side_log_bits();
+        self.los.clear_side_log_bits();
         self.base.clear_side_log_bits();
     }
 
     pub fn set_side_log_bits(&self) {
         self.immortal.set_side_log_bits();
+        self.los.set_side_log_bits();
         self.base.set_side_log_bits();
     }
 
@@ -850,6 +848,10 @@ impl<VM: VMBinding> CommonPlan<VM> {
 
     pub fn get_immortal(&self) -> &ImmortalSpace<VM> {
         &self.immortal
+    }
+
+    pub fn get_los(&self) -> &LargeObjectSpace<VM> {
+        &self.los
     }
 
     pub fn get_nonmoving(&self) -> &NonMovingSpace<VM> {

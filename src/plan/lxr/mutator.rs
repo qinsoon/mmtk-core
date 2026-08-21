@@ -36,15 +36,21 @@ pub fn lxr_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWor
     immix_allocator.reset();
 }
 
+// LXR does not use `CommonPlan` (Immortal/NonMoving allocation never worked properly for it), so
+// we don't ask `create_allocator_mapping`/`create_space_mapping` to wire those up. LOS is LXR's
+// own field (a ref-counting flavored space, not `CommonPlan`'s), so we reserve and wire it up
+// manually here, the same way immix_space is.
 const RESERVED_ALLOCATORS: ReservedAllocators = ReservedAllocators {
     n_immix: 1,
+    n_large_object: 1,
     ..ReservedAllocators::DEFAULT
 };
 
 lazy_static! {
     pub static ref ALLOCATOR_MAPPING: EnumMap<AllocationSemantics, AllocatorSelector> = {
-        let mut map = create_allocator_mapping(RESERVED_ALLOCATORS, true);
+        let mut map = create_allocator_mapping(RESERVED_ALLOCATORS, false);
         map[AllocationSemantics::Default] = AllocatorSelector::Immix(0);
+        map[AllocationSemantics::Los] = AllocatorSelector::LargeObject(0);
         map
     };
 }
@@ -57,8 +63,9 @@ pub fn create_lxr_mutator<VM: VMBinding>(
     let config = MutatorConfig {
         allocator_mapping: &ALLOCATOR_MAPPING,
         space_mapping: Box::new({
-            let mut vec = create_space_mapping(RESERVED_ALLOCATORS, true, mmtk.get_plan());
+            let mut vec = create_space_mapping(RESERVED_ALLOCATORS, false, mmtk.get_plan());
             vec.push((AllocatorSelector::Immix(0), &lxr.immix_space));
+            vec.push((AllocatorSelector::LargeObject(0), &lxr.los));
             vec
         }),
         prepare_func: &lxr_mutator_prepare,

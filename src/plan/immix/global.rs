@@ -9,7 +9,6 @@ use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::ImmixSpaceArgs;
 use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
-use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
@@ -34,8 +33,6 @@ pub struct Immix<VM: VMBinding> {
     #[space]
     #[copy_semantics(CopySemantics::DefaultCopy)]
     pub immix_space: ImmixSpace<VM>,
-    #[space]
-    pub los: LargeObjectSpace<VM>,
     #[parent]
     pub common: CommonPlan<VM>,
     last_gc_was_defrag: AtomicBool,
@@ -112,13 +109,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn get_used_pages(&self) -> usize {
-        self.immix_space.reserved_pages()
-            + self.los.reserved_pages()
-            + self.common.get_used_pages()
-    }
-
-    fn get_los(&self) -> Option<&dyn Space<Self::VM>> {
-        Some(&self.los)
+        self.immix_space.reserved_pages() + self.common.get_used_pages()
     }
 
     fn base(&self) -> &BasePlan<VM> {
@@ -154,7 +145,6 @@ impl<VM: VMBinding> Immix<VM> {
         mut plan_args: CreateSpecificPlanArgs<VM>,
         space_args: ImmixSpaceArgs,
     ) -> Self {
-        let needs_log_bit = plan_args.constraints.needs_log_bit;
         Immix {
             immix_space: ImmixSpace::new(
                 if space_args.mixed_age {
@@ -173,11 +163,6 @@ impl<VM: VMBinding> Immix<VM> {
                     )
                 },
                 space_args,
-            ),
-            los: LargeObjectSpace::new(
-                plan_args.get_normal_space_args("los", true, false, VMRequest::discontiguous()),
-                false,
-                needs_log_bit,
             ),
             common: CommonPlan::new(plan_args),
             last_gc_was_defrag: AtomicBool::new(false),
@@ -225,7 +210,6 @@ impl<VM: VMBinding> Immix<VM> {
         unlog_bits_op: UnlogBitsOperation,
     ) {
         self.common.prepare(tls, true);
-        self.los.prepare(true);
         self.immix_space.prepare(
             true,
             Some(crate::policy::immix::defrag::StatsForDefrag::new(self)),
@@ -241,7 +225,6 @@ impl<VM: VMBinding> Immix<VM> {
         unlog_bits_op: UnlogBitsOperation,
     ) {
         self.common.release(tls, true);
-        self.los.release(true);
         // release the collected region
         self.immix_space.release(true, unlog_bits_op);
     }

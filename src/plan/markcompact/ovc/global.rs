@@ -9,7 +9,6 @@ use crate::plan::tracing::gc_work::weakref::{
     VMForwardWeakRefs, VMPostForwarding, VMProcessWeakRefs,
 };
 use crate::plan::{AllocationSemantics, Plan, PlanConstraints};
-use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::ovc::OVCSpace;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
@@ -33,8 +32,6 @@ pub struct OVC<VM: VMBinding> {
     pub common: CommonPlan<VM>,
     #[space]
     pub ovc_space: OVCSpace<VM>,
-    #[space]
-    pub los: LargeObjectSpace<VM>,
 }
 
 /// The plan constraints for the OVC plan.
@@ -72,18 +69,12 @@ impl<VM: VMBinding> Plan for OVC<VM> {
 
     fn prepare(&mut self, tls: VMWorkerThread) {
         self.common.prepare(tls, true);
-        self.los.prepare(true);
         self.ovc_space.prepare();
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
         self.common.release(tls, true);
-        self.los.release(true);
         self.ovc_space.release();
-    }
-
-    fn get_los(&self) -> Option<&dyn Space<Self::VM>> {
-        Some(&self.los)
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
@@ -115,8 +106,9 @@ impl<VM: VMBinding> Plan for OVC<VM> {
             OVCSpace::<VM>::add_compact_tasks,
         ));
 
-        scheduler.work_buckets[WorkBucketStage::Compact]
-            .set_sentinel(Box::new(AfterCompact::<VM>::new(&self.ovc_space, &self.los)));
+        scheduler.work_buckets[WorkBucketStage::Compact].set_sentinel(Box::new(
+            AfterCompact::<VM>::new(&self.ovc_space, &self.common.los),
+        ));
 
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]
@@ -183,7 +175,7 @@ impl<VM: VMBinding> Plan for OVC<VM> {
     }
 
     fn get_used_pages(&self) -> usize {
-        self.ovc_space.reserved_pages() + self.los.reserved_pages() + self.common.get_used_pages()
+        self.ovc_space.reserved_pages() + self.common.get_used_pages()
     }
 }
 
@@ -195,7 +187,6 @@ impl<VM: VMBinding> OVC<VM> {
             global_side_metadata_specs: SideMetadataContext::new_global_specs(&[]),
         };
 
-        let needs_log_bit = plan_args.constraints.needs_log_bit;
         OVC {
             ovc_space: OVCSpace::new(plan_args.get_normal_space_args(
                 "ovc_space",
@@ -203,11 +194,6 @@ impl<VM: VMBinding> OVC<VM> {
                 false,
                 VMRequest::discontiguous(),
             )),
-            los: LargeObjectSpace::new(
-                plan_args.get_normal_space_args("los", true, false, VMRequest::discontiguous()),
-                false,
-                needs_log_bit,
-            ),
             common: CommonPlan::new(plan_args),
         }
     }

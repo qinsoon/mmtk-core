@@ -657,8 +657,7 @@ pub(crate) fn create_space_mapping<VM: VMBinding>(
         ));
         vec.push((
             reserved.add_large_object_allocator(),
-            plan.get_los()
-                .expect("include_common_plan is true but the plan has no LOS"),
+            plan.common().get_los(),
         ));
         vec.push((
             if cfg!(feature = "marksweep_as_nonmoving") {
