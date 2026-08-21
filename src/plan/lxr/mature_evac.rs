@@ -7,7 +7,7 @@ use crate::plan::lxr::gc_work::mature_evac::SelectDefragBlocks;
 use crate::plan::lxr::gc_work::mature_evac::SELECT_DEFRAG_BLOCK_JOB_COUNTER;
 use crate::policy::immix::block::{Block, BlockState};
 use crate::policy::immix::line::Line;
-use crate::policy::lxr::LXRImmixSpace;
+use crate::policy::lxr::LXRSpace;
 use crate::policy::space::Space;
 use crate::scheduler::WorkBucketStage;
 use crate::util::linear_scan::Region;
@@ -133,7 +133,7 @@ pub struct MatureEvacuationSet {
 
 impl MatureEvacuationSet {
     /// Release all the mature defrag source blocks
-    pub fn sweep_mature_evac_candidates<VM: VMBinding>(&self, space: &LXRImmixSpace<VM>) {
+    pub fn sweep_mature_evac_candidates<VM: VMBinding>(&self, space: &LXRSpace<VM>) {
         let mut defrag_blocks: Vec<Block> =
             std::mem::take(&mut *self.defrag_blocks.lock().unwrap());
         if defrag_blocks.is_empty() {
@@ -151,7 +151,7 @@ impl MatureEvacuationSet {
         }
     }
 
-    pub fn schedule_defrag_selection_packets<VM: VMBinding>(&self, space: &LXRImmixSpace<VM>) {
+    pub fn schedule_defrag_selection_packets<VM: VMBinding>(&self, space: &LXRSpace<VM>) {
         let tasks =
             space
                 .chunk_map()

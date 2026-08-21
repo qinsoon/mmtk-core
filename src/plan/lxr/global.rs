@@ -19,7 +19,7 @@ use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::block::Block;
 use crate::policy::immix::ImmixSpaceArgs;
-use crate::policy::lxr::{LXRImmixSpace, LXRLargeObjectSpace};
+use crate::policy::lxr::{LXRSpace, LXRLargeObjectSpace};
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::*;
 use crate::util::alloc::allocators::AllocatorSelector;
@@ -57,7 +57,7 @@ pub struct LXR<VM: VMBinding> {
     #[post_scan]
     #[space]
     #[copy_semantics(CopySemantics::DefaultCopy)]
-    pub immix_space: LXRImmixSpace<VM>,
+    pub immix_space: LXRSpace<VM>,
     #[space]
     pub los: LXRLargeObjectSpace<VM>,
     #[parent]
@@ -371,7 +371,7 @@ impl<VM: VMBinding> LXR<VM> {
             constraints: &LXR_CONSTRAINTS,
             global_side_metadata_specs,
         };
-        let immix_space = LXRImmixSpace::new(
+        let immix_space = LXRSpace::new(
             plan_args.get_mature_space_args("immix", true, false, VMRequest::discontiguous()),
             ImmixSpaceArgs {
                 never_move_objects: false,

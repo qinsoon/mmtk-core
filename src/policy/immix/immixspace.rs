@@ -38,7 +38,7 @@ pub(crate) const TRACE_KIND_FAST: TraceKind = 0;
 pub(crate) const TRACE_KIND_DEFRAG: TraceKind = 1;
 
 /// Extension trait exposing the block/line-acquisition and copy-context operations that differ
-/// between the generic tracing [`ImmixSpace`] and LXR's ref-counting `LXRImmixSpace`. Both
+/// between the generic tracing [`ImmixSpace`] and LXR's ref-counting `LXRSpace`. Both
 /// [`crate::util::alloc::ImmixAllocator`] and the Immix copy contexts are written against this
 /// trait object so they work unmodified regardless of which concrete space they target.
 pub trait ImmixSpaceExt<VM: VMBinding>: Space<VM> {
@@ -63,7 +63,7 @@ pub trait ImmixSpaceExt<VM: VMBinding>: Space<VM> {
     /// Prepare a freshly-acquired clean block's line-mark metadata for allocation.
     ///
     /// Default no-op: LXR tracks liveness via reference counts, not the line-mark table, so
-    /// `LXRImmixSpace` never needs this. `ImmixSpace` overrides it to bulk-clear the stale
+    /// `LXRSpace` never needs this. `ImmixSpace` overrides it to bulk-clear the stale
     /// line-mark table and eagerly mark lines if concurrent marking is currently active.
     fn prepare_new_clean_block_for_allocator(&self, _block: Block) {}
 
@@ -370,7 +370,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Like [`Self::new`], but with additional local side-metadata specs mapped alongside the
-    /// generic tracing set. Used by `LXRImmixSpace`, which needs its own ref-counting metadata
+    /// generic tracing set. Used by `LXRSpace`, which needs its own ref-counting metadata
     /// (RC table, straddle-line table, field-log table, nursery-promotion table, line-reuse
     /// counts) mapped on top of the space this wraps.
     pub fn new_with_extra_side_metadata_specs(
@@ -460,7 +460,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Flush just the underlying `BlockPageResource`'s thread-local queues, without touching the
-    /// reusable-block pool. Exposed for `LXRImmixSpace`, which never flushes reusable blocks here
+    /// reusable-block pool. Exposed for `LXRSpace`, which never flushes reusable blocks here
     /// (see the FIXME above).
     pub(crate) fn flush_pr_only(&self) {
         #[cfg(target_pointer_width = "64")]
@@ -468,13 +468,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Notify the defrag statistics machinery that a new clean block was handed out. Exposed for
-    /// `LXRImmixSpace` to reuse without needing direct access to the private `defrag` field.
+    /// `LXRSpace` to reuse without needing direct access to the private `defrag` field.
     pub(crate) fn notify_new_clean_block(&self, copy: bool) {
         self.defrag.notify_new_clean_block(copy);
     }
 
     /// Reset the object mark state to "marked", matching the encoding tracing's `prepare()` uses.
-    /// Exposed for `LXRImmixSpace::prepare_rc` to reuse the same mark-bit encoding.
+    /// Exposed for `LXRSpace::prepare_rc` to reuse the same mark-bit encoding.
     pub(crate) fn reset_mark_state_to_marked(&mut self) {
         if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
             self.mark_state = Self::MARKED_STATE;
@@ -485,19 +485,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Reset the "lines consumed via mutator reuse" counter. Exposed for
-    /// `LXRImmixSpace::release_rc`.
+    /// `LXRSpace::release_rc`.
     pub(crate) fn reset_reused_lines_consumed(&self) {
         self.reused_lines_consumed.store(0, Ordering::Relaxed);
     }
 
     /// Add to the "lines consumed via mutator reuse" counter. Exposed for
-    /// `LXRImmixSpace::rc_get_next_available_lines`.
+    /// `LXRSpace::rc_get_next_available_lines`.
     pub(crate) fn add_reused_lines_consumed(&self, lines: usize) {
         self.reused_lines_consumed.fetch_add(lines, Ordering::Relaxed);
     }
 
     /// Read the "lines consumed via mutator reuse" counter. Exposed for
-    /// `LXRImmixSpace::get_mutator_recycled_lines_in_pages`.
+    /// `LXRSpace::get_mutator_recycled_lines_in_pages`.
     pub(crate) fn reused_lines_consumed_count(&self) -> usize {
         self.reused_lines_consumed.load(Ordering::Relaxed)
     }

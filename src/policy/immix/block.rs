@@ -239,7 +239,7 @@ impl Block {
     /// Initialize a clean block after acquired from page-resource. `rc_enabled` distinguishes
     /// LXR's ref-counting block-state protocol from the generic tracing one; it is a plain flag
     /// (not a space reference) because this method is shared by both `ImmixSpace` and
-    /// `LXRImmixSpace`, and neither regime needs anything else from the space here.
+    /// `LXRSpace`, and neither regime needs anything else from the space here.
     pub fn init(&self, copy: bool, reuse: bool, rc_enabled: bool) {
         if rc_enabled {
             if !reuse {

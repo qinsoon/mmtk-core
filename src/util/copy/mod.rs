@@ -198,7 +198,7 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
                 }
                 CopySelector::Immix(index) => {
                     // `ImmixCopyContext` resolves the concrete space (tracing `ImmixSpace` or
-                    // LXR's `LXRImmixSpace`) itself via `ImmixAllocator::new`, so no downcast here.
+                    // LXR's `LXRSpace`) itself via `ImmixAllocator::new`, so no downcast here.
                     ret.immix[index as usize].write(ImmixCopyContext::new(
                         worker_tls,
                         context.clone(),

@@ -28,7 +28,7 @@ use std::sync::OnceLock;
 /// Whether RC-mode mature-space evacuation is compiled in.
 const LXR_MATURE_EVACUATION: bool = !cfg!(feature = "lxr_no_mature_evac");
 
-/// Plan-level hooks invoked by [`LXRImmixSpace`] during mutator allocation.
+/// Plan-level hooks invoked by [`LXRSpace`] during mutator allocation.
 /// Default impls are no-ops; LXR's `BlockAllocation` provides the concrete implementation.
 pub trait ImmixHooks<VM: VMBinding>: Send + Sync {
     /// Called after a fresh clean block is acquired. `copy` distinguishes
@@ -48,16 +48,16 @@ pub trait ImmixHooks<VM: VMBinding>: Send + Sync {
 /// layers reference-counting semantics (mark-and-RC liveness, RC-based hole search, mature-object
 /// evacuation with RC transfer) on top, reusing the inner space's block/chunk/page-resource
 /// machinery rather than duplicating it.
-pub struct LXRImmixSpace<VM: VMBinding> {
+pub struct LXRSpace<VM: VMBinding> {
     immix: ImmixSpace<VM>,
     hooks: OnceLock<&'static dyn ImmixHooks<VM>>,
     pub is_end_of_satb_or_full_gc: bool,
     pub rc: RefCountHelper<VM>,
 }
 
-unsafe impl<VM: VMBinding> Sync for LXRImmixSpace<VM> {}
+unsafe impl<VM: VMBinding> Sync for LXRSpace<VM> {}
 
-impl<VM: VMBinding> SFT for LXRImmixSpace<VM> {
+impl<VM: VMBinding> SFT for LXRSpace<VM> {
     fn name(&self) -> &'static str {
         self.get_name()
     }
@@ -162,7 +162,7 @@ impl<VM: VMBinding> SFT for LXRImmixSpace<VM> {
     }
 }
 
-impl<VM: VMBinding> Space<VM> for LXRImmixSpace<VM> {
+impl<VM: VMBinding> Space<VM> for LXRSpace<VM> {
     fn as_space(&self) -> &dyn Space<VM> {
         self
     }
@@ -200,7 +200,7 @@ impl<VM: VMBinding> Space<VM> for LXRImmixSpace<VM> {
     }
 }
 
-impl<VM: VMBinding> PolicyTraceObject<VM> for LXRImmixSpace<VM> {
+impl<VM: VMBinding> PolicyTraceObject<VM> for LXRSpace<VM> {
     fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
         queue: &mut Q,
@@ -226,7 +226,7 @@ impl<VM: VMBinding> PolicyTraceObject<VM> for LXRImmixSpace<VM> {
     }
 }
 
-impl<VM: VMBinding> ImmixSpaceExt<VM> for LXRImmixSpace<VM> {
+impl<VM: VMBinding> ImmixSpaceExt<VM> for LXRSpace<VM> {
     fn get_clean_block(
         &self,
         tls: VMThread,
@@ -289,11 +289,11 @@ impl<VM: VMBinding> ImmixSpaceExt<VM> for LXRImmixSpace<VM> {
     }
 }
 
-impl<VM: VMBinding> LXRImmixSpace<VM> {
+impl<VM: VMBinding> LXRSpace<VM> {
     pub fn new(args: PlanCreateSpaceArgs<VM>, space_args: ImmixSpaceArgs) -> Self {
         use crate::util::metadata::side_metadata::spec_defs::IX_LINE_REUSE_COUNT;
         use crate::util::metadata::MetadataSpec;
-        LXRImmixSpace {
+        LXRSpace {
             immix: ImmixSpace::new_with_extra_side_metadata_specs(
                 args,
                 space_args,
@@ -314,7 +314,7 @@ impl<VM: VMBinding> LXRImmixSpace<VM> {
     pub fn install_hooks(&self, hooks: &'static dyn ImmixHooks<VM>) {
         self.hooks
             .set(hooks)
-            .unwrap_or_else(|_| panic!("LXRImmixSpace::install_hooks called more than once"));
+            .unwrap_or_else(|_| panic!("LXRSpace::install_hooks called more than once"));
     }
 
     fn hooks(&self) -> Option<&'static dyn ImmixHooks<VM>> {

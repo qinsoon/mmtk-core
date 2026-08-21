@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 use crate::plan::lxr::{LazySweepingJobsCounter, LXR};
 use crate::policy::immix::block::{Block, BlockState};
 use crate::policy::immix::line::Line;
-use crate::policy::lxr::LXRImmixSpace;
+use crate::policy::lxr::LXRSpace;
 use crate::scheduler::{GCWork, GCWorker};
 use crate::util::heap::chunk_map::Chunk;
 use crate::util::linear_scan::Region;
@@ -49,7 +49,7 @@ impl<VM: VMBinding> SweepDeadCycles<VM> {
         self.rc.set(o, 0);
     }
 
-    fn process_block(&mut self, block: Block, lxr: &LXR<VM>, immix_space: &LXRImmixSpace<VM>) {
+    fn process_block(&mut self, block: Block, lxr: &LXR<VM>, immix_space: &LXRSpace<VM>) {
         let mut has_dead_object = false;
         let mut has_live = false;
         let mut cursor = block.start();

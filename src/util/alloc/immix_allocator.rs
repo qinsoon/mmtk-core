@@ -174,14 +174,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     ) -> Self {
         let space = space.unwrap();
         // `ImmixAllocator` targets either the generic tracing `ImmixSpace` or LXR's
-        // ref-counting `LXRImmixSpace`. Both implement `ImmixSpaceExt`; resolve the concrete
+        // ref-counting `LXRSpace`. Both implement `ImmixSpaceExt`; resolve the concrete
         // type once here so the rest of the allocator is written purely against the trait.
         let space: &'static dyn ImmixSpaceExt<VM> =
             if let Some(s) = space.downcast_ref::<ImmixSpace<VM>>() {
                 s
             } else {
                 panic!(
-                    "ImmixAllocator::new: space {} is neither ImmixSpace nor LXRImmixSpace",
+                    "ImmixAllocator::new: space {} is neither ImmixSpace nor LXRSpace",
                     space.get_name()
                 )
             };
