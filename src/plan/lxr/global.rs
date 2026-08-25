@@ -2,6 +2,7 @@ use super::block_allocation::BlockAllocation;
 use super::gc_work::nursery_sweeping::ReleaseLOSNursery;
 use super::gc_work::prepare::FastRCPrepare;
 use super::gc_work::rc::ProcessDecs;
+use super::gc_work::tracing::LXRRefTrace;
 use super::gc_work::LXRGCWorkContext;
 use super::mature_evac::MatureEvacuationSet;
 use super::mutator::ALLOCATOR_MAPPING;
@@ -18,7 +19,8 @@ use crate::plan::AllocationSemantics;
 use crate::plan::MutatorContext;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
-use crate::policy::immix::block::Block;
+use crate::policy::immix::block::{Block, BlockState};
+use crate::util::linear_scan::UnstraddlableRegion;
 use crate::policy::immix::ImmixSpaceArgs;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
@@ -28,10 +30,14 @@ use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::analysis::GcHookWork;
 use crate::util::constants::*;
 use crate::util::copy::*;
+use crate::util::finalizable_processor::Finalization;
 use crate::util::heap::{SpaceStats, VMRequest};
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::MetadataSpec;
 use crate::util::rc::{RefCountHelper, RC_TABLE};
+use crate::util::reference_processor::{
+    PhantomRefProcessing, RefEnqueue, SoftRefProcessing, WeakRefProcessing,
+};
 #[cfg(feature = "sanity")]
 use crate::util::sanity::sanity_checker::*;
 use crate::util::{metadata, Address, ObjectReference};
@@ -344,6 +350,87 @@ impl<VM: VMBinding> Plan for LXR<VM> {
     fn concurrent(&self) -> Option<&dyn ConcurrentPlan<VM = VM>> {
         Some(self)
     }
+
+    fn retain_for_gc_bookkeeping(&self, object: ObjectReference) {
+        // Skip nursery objects here: an RC hold alone does not make sense for them (they
+        // normally sit at rc==0 until promoted, and blindly incrementing would desync them from
+        // `rc_sweep_nursery`'s "either in-place-promoted, or fully rc-dead" invariant for their
+        // block). `LXRRefTrace::trace_object` handles promoting/protecting them correctly once
+        // they're actually traced as a candidate (every pause, via `Finalization`/
+        // `SoftRefProcessing`), which for a nursery object is timing-safe since nursery sweep
+        // always runs later in the same pause, after that trace has had a chance to run.
+        if self.immix_space.in_space(object)
+            && Block::containing(object).get_state() == BlockState::Nursery
+        {
+            return;
+        }
+        let _ = self.rc.inc(object);
+    }
+
+    fn release_gc_bookkeeping(&self, object: ObjectReference, mmtk: &'static MMTK<VM>) {
+        // Route through the same `ProcessDecs` path an ordinary mutator/GC-driven decrement
+        // takes, instead of a bare `rc.dec()`: if this hold is what brings the object's count to
+        // zero, that transition needs `process_dead_object`'s side effects (recursively
+        // decrementing the object's own fields, VO-bit clearing, dead-block bookkeeping), which a
+        // bare decrement would silently skip, leaking holds on the object's children.
+        mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained].add(ProcessDecs::new(
+            vec![object],
+            LazySweepingJobsCounter::new_decs(),
+        ));
+    }
+
+    fn ensure_forwarded_for_gc_bookkeeping(
+        &self,
+        object: ObjectReference,
+        worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        // A weak/phantom referent can be alive (nonzero rc, from real heap references elsewhere,
+        // or possibly our own `retain_for_gc_bookkeeping` hold on a same object tracked under a
+        // different semantics) yet never independently traced this pause: nothing calls
+        // `trace_object` on it, since weak/phantom references must not expand the transitive
+        // closure. For plans that only forward objects as a byproduct of the ordinary trace
+        // (Immix/GenImmix), that's fine -- forwarding info is already populated by the time weak
+        // refs are processed. LXR additionally evacuates individual defrag-source blocks outside
+        // any full trace, so such an object can be sitting in a block that just got evacuated
+        // without ever being visited, leaving its address stale. Actively (but non-recursively --
+        // note the no-op queue below, so this does not expand the closure) forward it here if so.
+        if let Some(new) = object.get_forwarded_object() {
+            return new;
+        }
+        let in_nursery_block = self.immix_space.in_space(object)
+            && Block::containing(object).get_state() == BlockState::Nursery;
+        if self.rc.count(object) == 0 {
+            if in_nursery_block {
+                // Not independently promoted here (see `retain_for_gc_bookkeeping`); a
+                // weakly/phantom-reachable-only nursery object that never gets promoted by
+                // ordinary means is allowed to die with its block, same as for any other plan.
+                return object;
+            }
+            // The caller observed `is_live()` (rc.count() > 0) moments ago, but a concurrent
+            // decrement can race and bring it to 0 before we get here (this mirrors the same
+            // race `LXRRefTrace::trace_object` guards against). Rather than handing back a
+            // now-stale/about-to-be-reclaimed address, give it the same one-time rescue hold: in
+            // the rare case this race actually happens, the referent survives one extra cycle
+            // (self-heals via the next full-heap/concurrent-marking sweep) instead of leaving a
+            // dangling pointer in a weak/phantom referent field.
+            let _ = self.rc.inc(object);
+        }
+        if self.immix_space.in_space(object) {
+            if in_nursery_block {
+                return object;
+            }
+            self.immix_space.rc_trace_object(
+                &mut |_: ObjectReference| {},
+                object,
+                CopySemantics::DefaultCopy,
+                self.current_pause().unwrap(),
+                true,
+                worker,
+            )
+        } else {
+            self.los().trace_object(&mut |_: ObjectReference| {}, object)
+        }
+    }
 }
 
 impl<VM: VMBinding> ConcurrentPlan for LXR<VM> {
@@ -638,11 +725,17 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare].set_enabled(pause != Pause::RefCount);
         let final_mark_or_full = pause == Pause::FinalMark || pause == Pause::Full;
         scheduler.work_buckets[WorkBucketStage::Closure].set_enabled(final_mark_or_full);
-        scheduler.work_buckets[WorkBucketStage::WeakRefClosure].set_enabled(final_mark_or_full);
-        scheduler.work_buckets[WorkBucketStage::FinalRefClosure].set_enabled(final_mark_or_full);
-        scheduler.work_buckets[WorkBucketStage::PhantomRefClosure].set_enabled(final_mark_or_full);
         scheduler.work_buckets[WorkBucketStage::STWRCDecsAndSweep]
             .set_enabled(!(super::LAZY_DECREMENTS && pause != Pause::Full));
+        // Reference/finalizer processing: enabled on every pause. mmtk-core's generic
+        // add_{weak,soft,phantom}_candidate/add_finalizer are called on every scan of every GC, so
+        // the candidate tables must be drained within the same pause they were populated in --
+        // otherwise a candidate could sit across intervening pauses where LXR (unlike Immix's
+        // full-heap-only tracing) may evacuate its containing block without ever visiting it.
+        scheduler.work_buckets[WorkBucketStage::SoftRefClosure].set_enabled(true);
+        scheduler.work_buckets[WorkBucketStage::WeakRefClosure].set_enabled(true);
+        scheduler.work_buckets[WorkBucketStage::FinalRefClosure].set_enabled(true);
+        scheduler.work_buckets[WorkBucketStage::PhantomRefClosure].set_enabled(true);
         // Always enabled
         scheduler.work_buckets[WorkBucketStage::Concurrent].set_enabled(true);
         scheduler.work_buckets[WorkBucketStage::ConcurrentResumable].set_enabled(true);
@@ -651,7 +744,6 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::PinningRootsTrace].set_enabled(false);
         scheduler.work_buckets[WorkBucketStage::VMRefClosure].set_enabled(false);
         scheduler.work_buckets[WorkBucketStage::VMRefForwarding].set_enabled(false);
-        scheduler.work_buckets[WorkBucketStage::SoftRefClosure].set_enabled(false);
         scheduler.work_buckets[WorkBucketStage::CalculateForwarding].set_enabled(false);
         scheduler.work_buckets[WorkBucketStage::SecondRoots].set_enabled(false);
         scheduler.work_buckets[WorkBucketStage::RefForwarding].set_enabled(false);
@@ -659,9 +751,30 @@ impl<VM: VMBinding> LXR<VM> {
         scheduler.work_buckets[WorkBucketStage::Compact].set_enabled(false);
     }
 
+    /// Schedule the generic reference/finalizer processing work packets. Called from every LXR
+    /// pause kind (see [`Self::disable_unnecessary_buckets`] for why this must not be limited to
+    /// `FinalMark`/`Full`). Mirrors what `Plan::schedule_common_work`/`ConcurrentImmix` do,
+    /// using [`LXRRefTrace`] in place of a plan-wide `DefaultTrace` (LXR's `DefaultTrace` is
+    /// `UnsupportedTrace` since it schedules everything else itself).
+    fn schedule_ref_and_finalization_work(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        if !*self.base().options.no_reference_types {
+            scheduler.work_buckets[WorkBucketStage::SoftRefClosure]
+                .add(SoftRefProcessing::<LXRRefTrace<VM>>::new());
+            scheduler.work_buckets[WorkBucketStage::WeakRefClosure].add(WeakRefProcessing::<VM>::new());
+            scheduler.work_buckets[WorkBucketStage::PhantomRefClosure]
+                .add(PhantomRefProcessing::<VM>::new());
+            scheduler.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
+        }
+        if !*self.base().options.no_finalizer {
+            scheduler.work_buckets[WorkBucketStage::FinalRefClosure]
+                .add(Finalization::<LXRRefTrace<VM>>::new());
+        }
+    }
+
     fn schedule_rc_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
         log::info!("Scheduling RC collection...");
         self.disable_unnecessary_buckets(scheduler, Pause::RefCount);
+        self.schedule_ref_and_finalization_work(scheduler);
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         self.process_prev_roots(scheduler);
         // Stop & scan mutators (mutator scanning can happen before STW)
@@ -677,6 +790,7 @@ impl<VM: VMBinding> LXR<VM> {
     fn schedule_concurrent_marking_initial_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         log::info!("Scheduling concurrent marking initial pause...");
         self.disable_unnecessary_buckets(scheduler, Pause::InitialMark);
+        self.schedule_ref_and_finalization_work(scheduler);
         self.process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add(StopMutators::<LXRGCWorkContext<VM>>::new_with_flush());
@@ -689,6 +803,7 @@ impl<VM: VMBinding> LXR<VM> {
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         log::info!("Scheduling concurrent marking final pause...");
         self.disable_unnecessary_buckets(scheduler, Pause::FinalMark);
+        self.schedule_ref_and_finalization_work(scheduler);
         self.process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
             .add(StopMutators::<LXRGCWorkContext<VM>>::new_with_flush());
@@ -703,6 +818,7 @@ impl<VM: VMBinding> LXR<VM> {
         log::info!("Scheduling emergency full-heap collection...");
         super::DISABLE_LASY_DEC_FOR_CURRENT_GC.store(true, Ordering::SeqCst);
         self.disable_unnecessary_buckets(scheduler, Pause::Full);
+        self.schedule_ref_and_finalization_work(scheduler);
         // Before start yielding, wrap all the roots from the previous GC with work-packets.
         self.process_prev_roots(scheduler);
         // Stop & scan mutators (mutator scanning can happen before STW)

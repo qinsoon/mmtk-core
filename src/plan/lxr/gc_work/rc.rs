@@ -674,19 +674,20 @@ impl<VM: VMBinding> ProcessDecs<VM> {
             } else {
                 *o
             };
-            let mut dead = false;
-            let mut is_los = false;
-            let mut already_run = false;
+            // NOTE: `fetch_update`'s closure may be invoked more than once (with different `c`
+            // values) if the CAS races with a concurrent modification -- e.g. another worker
+            // calling `RefCountHelper::inc` on the same object in between our read and our CAS
+            // attempt (this became common once reference/finalizer bookkeeping started giving
+            // objects extra RC holds every pause). Any side effect performed inside the closure
+            // based on an intermediate `c` is not rolled back even if that particular CAS attempt
+            // loses the race and a later retry (with a different `c`) is what actually commits --
+            // so `process_dead_object`'s side effects (recursively decrementing children, VO bit
+            // clearing, dead-block bookkeeping) must not live inside the closure. Only run them
+            // after `fetch_update` returns, based on its result: `Ok(1)` means the CAS that
+            // actually committed genuinely transitioned the count from 1 to 0 (fetch_update
+            // returns the value it successfully swapped away from), which is the one true
+            // (non-speculative) dead transition.
             let result = self.rc.clone().fetch_update(o, |c| {
-                if already_run {
-                    log::warn!("fetch_update is re-run! o: {o}");
-                } else {
-                    already_run = true;
-                }
-                if c == 1 && !dead {
-                    dead = true;
-                    is_los = self.process_dead_object(worker, o, lxr);
-                }
                 debug_assert!(c <= MAX_REF_COUNT);
                 if c == 0 || c == MAX_REF_COUNT {
                     None /* sticky */
@@ -694,8 +695,11 @@ impl<VM: VMBinding> ProcessDecs<VM> {
                     Some(c - 1)
                 }
             });
-            if result == Ok(1) && is_los {
-                lxr.los().rc_free(o);
+            if result == Ok(1) {
+                let is_los = self.process_dead_object(worker, o, lxr);
+                if is_los {
+                    lxr.los().rc_free(o);
+                }
             }
         }
     }

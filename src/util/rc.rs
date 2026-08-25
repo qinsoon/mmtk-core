@@ -94,24 +94,6 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         RC_TABLE.fetch_update_atomic(o.to_raw_address(), Ordering::Relaxed, Ordering::Relaxed, f)
     }
 
-    /// Returns `true` if object `o`'s reference count has saturated at `MAX_REF_COUNT` (sticky).
-    pub fn is_stuck(&self, o: ObjectReference) -> bool {
-        self.count(o) == MAX_REF_COUNT
-    }
-
-    /// Forces object `o`'s reference count to `MAX_REF_COUNT`, permanently marking it as sticky
-    /// so it is never reclaimed by reference counting.
-    pub fn stick(&self, o: ObjectReference) -> Result<u8, u8> {
-        self.fetch_update(o, |x| {
-            debug_assert!(x <= MAX_REF_COUNT);
-            if x == MAX_REF_COUNT {
-                None
-            } else {
-                Some(MAX_REF_COUNT)
-            }
-        })
-    }
-
     /// Increments object `o`'s reference count by one, leaving it unchanged (saturating) once
     /// it has reached `MAX_REF_COUNT`.
     pub fn inc(&self, o: ObjectReference) -> Result<u8, u8> {

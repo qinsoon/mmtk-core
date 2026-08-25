@@ -368,6 +368,51 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
         WorkBucketStage::Prepare
     }
 
+    /// Called when `object` starts being tracked purely by GC-internal bookkeeping outside the
+    /// ordinary object graph -- currently only when it is registered as a finalizable candidate
+    /// (`memory_manager::add_finalizer`). Most plans never physically reclaim an object except as
+    /// a result of a full trace (so simply re-tracing/marking it, as the generic
+    /// `FinalizableProcessor`/`ReferenceProcessor` machinery already does every GC, is enough to
+    /// keep it alive) and can leave this as a no-op. Plans that reclaim objects immediately their
+    /// reference count drops to zero (e.g. LXR) need to additionally hold a real reference count
+    /// on `object` for as long as it is tracked this way, since a re-trace/mark alone does not
+    /// stop such a plan from having already reclaimed it before the trace ever runs.
+    fn retain_for_gc_bookkeeping(&self, _object: ObjectReference) {}
+
+    /// The inverse of [`Self::retain_for_gc_bookkeeping`]: called when `object` stops being
+    /// tracked this way (currently only when a finalizable candidate is retrieved by the binding,
+    /// e.g. `memory_manager::get_finalized_object`/`get_all_finalizers`/`get_finalizers_for`, or a
+    /// soft reference's referent hold is dropped in `ReferenceProcessor::process_reference`).
+    ///
+    /// Plans that reclaim objects immediately their reference count drops to zero must release
+    /// this hold through the same path (however indirect) that an ordinary mutator/GC-driven
+    /// decrement would take, not a bare decrement -- the transition to zero may have side effects
+    /// (e.g. recursively decrementing the object's own fields) that a bare decrement would skip,
+    /// silently leaking those child objects' holds.
+    fn release_gc_bookkeeping(&self, _object: ObjectReference, _mmtk: &'static MMTK<Self::VM>) {}
+
+    /// Ensure `object` (assumed to already satisfy `is_live()`) has been forwarded if this GC may
+    /// move it, without expanding the transitive closure (unlike [`Self::retain_for_gc_bookkeeping`],
+    /// this must not keep anything alive that wasn't already going to survive -- it only relocates
+    /// `object` if it was already going to survive for other reasons). Used when processing
+    /// weak/phantom references, which must never resurrect their referent.
+    ///
+    /// Most plans don't need to override this: if a plan may move objects, forwarding happens as
+    /// a byproduct of the ordinary trace from strong roots, so by the time weak/phantom references
+    /// are processed, forwarding info (if any) is already populated and the default
+    /// (`ObjectReference::get_forwarded_object`) suffices. Plans that evacuate only a subset of the
+    /// heap outside the ordinary trace (e.g. LXR's per-pause partial defrag) need to override this:
+    /// an object that is alive purely due to GC-internal bookkeeping outside the ordinary object
+    /// graph (nothing traces it, since only weak/phantom references reach it) would otherwise never
+    /// get moved/updated even though the region it's in gets evacuated.
+    fn ensure_forwarded_for_gc_bookkeeping(
+        &self,
+        object: ObjectReference,
+        _worker: &mut GCWorker<Self::VM>,
+    ) -> ObjectReference {
+        object.get_forwarded_object().unwrap_or(object)
+    }
+
     /// Return whether the current GC may move any object.  The VM binding can make use of this
     /// information and choose to or not to update some data structures that record the addresses
     /// of objects.

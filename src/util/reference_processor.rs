@@ -41,19 +41,19 @@ impl ReferenceProcessors {
         }
     }
 
-    pub fn add_soft_candidate(&self, reff: ObjectReference) {
+    pub fn add_soft_candidate(&self, reff: ObjectReference) -> bool {
         trace!("Add soft candidate: {}", reff);
-        self.soft.add_candidate(reff);
+        self.soft.add_candidate(reff)
     }
 
-    pub fn add_weak_candidate(&self, reff: ObjectReference) {
+    pub fn add_weak_candidate(&self, reff: ObjectReference) -> bool {
         trace!("Add weak candidate: {}", reff);
-        self.weak.add_candidate(reff);
+        self.weak.add_candidate(reff)
     }
 
-    pub fn add_phantom_candidate(&self, reff: ObjectReference) {
+    pub fn add_phantom_candidate(&self, reff: ObjectReference) -> bool {
         trace!("Add phantom candidate: {}", reff);
-        self.phantom.add_candidate(reff);
+        self.phantom.add_candidate(reff)
     }
 
     /// This will invoke enqueue for each reference processor, which will
@@ -98,19 +98,26 @@ impl ReferenceProcessors {
     }
 
     /// Scan soft references.
-    pub fn scan_soft_refs<VM: VMBinding>(&self, mmtk: &'static MMTK<VM>) {
+    pub fn scan_soft_refs<VM: VMBinding>(&self, mmtk: &'static MMTK<VM>, worker: &mut GCWorker<VM>) {
         // This will update the references (and the referents).
-        self.soft.scan::<VM>(is_nursery_gc(mmtk.get_plan()));
+        self.soft
+            .scan::<VM>(is_nursery_gc(mmtk.get_plan()), mmtk, worker);
     }
 
     /// Scan weak references.
-    pub fn scan_weak_refs<VM: VMBinding>(&self, mmtk: &'static MMTK<VM>) {
-        self.weak.scan::<VM>(is_nursery_gc(mmtk.get_plan()));
+    pub fn scan_weak_refs<VM: VMBinding>(&self, mmtk: &'static MMTK<VM>, worker: &mut GCWorker<VM>) {
+        self.weak
+            .scan::<VM>(is_nursery_gc(mmtk.get_plan()), mmtk, worker);
     }
 
     /// Scan phantom references.
-    pub fn scan_phantom_refs<VM: VMBinding>(&self, mmtk: &'static MMTK<VM>) {
-        self.phantom.scan::<VM>(is_nursery_gc(mmtk.get_plan()));
+    pub fn scan_phantom_refs<VM: VMBinding>(
+        &self,
+        mmtk: &'static MMTK<VM>,
+        worker: &mut GCWorker<VM>,
+    ) {
+        self.phantom
+            .scan::<VM>(is_nursery_gc(mmtk.get_plan()), mmtk, worker);
     }
 }
 
@@ -194,14 +201,16 @@ impl ReferenceProcessor {
         }
     }
 
-    /// Add a candidate.
-    pub fn add_candidate(&self, reff: ObjectReference) {
+    /// Add a candidate. Returns `true` if `reff` was not already tracked (a genuinely new
+    /// candidate), `false` if it was already in the table (e.g. re-discovered on a later scan of
+    /// the same reference object).
+    pub fn add_candidate(&self, reff: ObjectReference) -> bool {
         if !self.allow_new_candidate.load(Ordering::SeqCst) {
-            return;
+            return false;
         }
 
         let mut sync = self.sync.lock().unwrap();
-        sync.references.insert(reff);
+        sync.references.insert(reff)
     }
 
     fn disallow_new_candidate(&self) {
@@ -365,7 +374,12 @@ impl ReferenceProcessor {
     // TODO: nursery is currently ignored. We used to use Vec for the reference table, and use an int
     // to point to the reference that we last scanned. However, when we use HashSet for reference table,
     // we can no longer do that.
-    fn scan<VM: VMBinding>(&self, _nursery: bool) {
+    fn scan<VM: VMBinding>(
+        &self,
+        _nursery: bool,
+        mmtk: &'static MMTK<VM>,
+        worker: &mut GCWorker<VM>,
+    ) {
         let mut sync = self.sync.lock().unwrap();
 
         debug!("Starting ReferenceProcessor.scan({:?})", self.semantics);
@@ -384,7 +398,9 @@ impl ReferenceProcessor {
         let new_set: HashSet<ObjectReference> = sync
             .references
             .iter()
-            .filter_map(|reff| self.process_reference::<VM>(*reff, &mut enqueued_references))
+            .filter_map(|reff| {
+                self.process_reference::<VM>(*reff, &mut enqueued_references, mmtk, worker)
+            })
             .collect();
 
         let num_old = sync.references.len();
@@ -466,19 +482,28 @@ impl ReferenceProcessor {
         &self,
         reference: ObjectReference,
         enqueued_references: &mut Vec<ObjectReference>,
+        mmtk: &'static MMTK<VM>,
+        worker: &mut GCWorker<VM>,
     ) -> Option<ObjectReference> {
         trace!("Process reference: {}", reference);
 
         // If the reference is dead, we're done with it. Let it (and
         // possibly its referent) be garbage-collected.
         if !reference.is_live() {
+            // This reference is leaving the table -- release the hold `add_candidate` placed on
+            // its (soft-only) referent, if any (see the comment below for why only soft).
+            if self.semantics == Semantics::SOFT {
+                if let Some(referent) = VM::VMReferenceGlue::get_referent(reference) {
+                    mmtk.get_plan().release_gc_bookkeeping(referent, mmtk);
+                }
+            }
             VM::VMReferenceGlue::clear_referent(reference);
             trace!(" UNREACHABLE reference: {}", reference);
             return None;
         }
 
         // The reference object is live.
-        let new_reference = Self::get_forwarded_reference(reference);
+        let new_reference = mmtk.get_plan().ensure_forwarded_for_gc_bookkeeping(reference, worker);
         trace!(" forwarded to: {}", new_reference);
 
         // Get the old referent.
@@ -497,7 +522,9 @@ impl ReferenceProcessor {
         if old_referent.is_live() {
             // Referent is still reachable in a way that is as strong as
             // or stronger than the current reference level.
-            let new_referent = Self::get_forwarded_referent(old_referent);
+            let new_referent = mmtk
+                .get_plan()
+                .ensure_forwarded_for_gc_bookkeeping(old_referent, worker);
             debug_assert!(new_referent.is_live());
             trace!("  forwarded referent to: {}", new_referent);
 
@@ -514,6 +541,13 @@ impl ReferenceProcessor {
             // Referent is unreachable. Clear the referent and enqueue the reference object.
             trace!("  UNREACHABLE referent: {}", old_referent);
 
+            // This entry is leaving the table -- release the hold `add_candidate` placed on the
+            // referent (soft-only; see the comment there). For weak/phantom references we never
+            // placed a hold on the referent in the first place (letting it die naturally is the
+            // whole point), so there is nothing to release there.
+            if self.semantics == Semantics::SOFT {
+                mmtk.get_plan().release_gc_bookkeeping(old_referent, mmtk);
+            }
             VM::VMReferenceGlue::clear_referent(new_reference);
             enqueued_references.push(new_reference);
             None
@@ -534,12 +568,12 @@ pub(crate) struct RescanReferences<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> GCWork<VM> for RescanReferences<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         if self.soft {
-            mmtk.reference_processors.scan_soft_refs(mmtk);
+            mmtk.reference_processors.scan_soft_refs(mmtk, worker);
         }
         if self.weak {
-            mmtk.reference_processors.scan_weak_refs(mmtk);
+            mmtk.reference_processors.scan_weak_refs(mmtk, worker);
         }
     }
 }
@@ -566,7 +600,7 @@ impl<T: Trace> GCWork<T::VM> for SoftRefProcessing<T> {
             });
         } else {
             // Scan soft references immediately without retaining.
-            mmtk.reference_processors.scan_soft_refs(mmtk);
+            mmtk.reference_processors.scan_soft_refs(mmtk, worker);
         }
     }
 }
@@ -580,8 +614,8 @@ impl<T: Trace> SoftRefProcessing<T> {
 #[derive(Default)]
 pub(crate) struct WeakRefProcessing<VM: VMBinding>(PhantomData<VM>);
 impl<VM: VMBinding> GCWork<VM> for WeakRefProcessing<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        mmtk.reference_processors.scan_weak_refs(mmtk);
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        mmtk.reference_processors.scan_weak_refs(mmtk, worker);
     }
 }
 impl<VM: VMBinding> WeakRefProcessing<VM> {
@@ -593,8 +627,8 @@ impl<VM: VMBinding> WeakRefProcessing<VM> {
 #[derive(Default)]
 pub(crate) struct PhantomRefProcessing<VM: VMBinding>(PhantomData<VM>);
 impl<VM: VMBinding> GCWork<VM> for PhantomRefProcessing<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        mmtk.reference_processors.scan_phantom_refs(mmtk);
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        mmtk.reference_processors.scan_phantom_refs(mmtk, worker);
     }
 }
 impl<VM: VMBinding> PhantomRefProcessing<VM> {
