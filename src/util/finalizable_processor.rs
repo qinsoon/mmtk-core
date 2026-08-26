@@ -34,7 +34,9 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         }
     }
 
-    pub fn add(&mut self, object: F) {
+    pub fn add<VM: VMBinding>(&mut self, mmtk: &MMTK<VM>, object: F) {
+        mmtk.get_plan()
+            .retain_for_gc_bookkeeping(object.get_reference());
         self.candidates.push(object);
     }
 
@@ -97,11 +99,15 @@ impl<F: Finalizable> FinalizableProcessor<F> {
             .for_each(|f| FinalizableProcessor::<F>::forward_finalizable_reference(tracer, f));
     }
 
-    pub fn get_ready_object(&mut self) -> Option<F> {
-        self.ready_for_finalize.pop()
+    pub fn get_ready_object<VM: VMBinding>(&mut self, mmtk: &'static MMTK<VM>) -> Option<F> {
+        let obj = self.ready_for_finalize.pop();
+        if let Some(f) = obj.as_ref() {
+            mmtk.get_plan().release_gc_bookkeeping(f.get_reference(), mmtk);
+        }
+        obj
     }
 
-    pub fn get_all_finalizers(&mut self) -> Vec<F> {
+    pub fn get_all_finalizers<VM: VMBinding>(&mut self, mmtk: &'static MMTK<VM>) -> Vec<F> {
         let mut ret = std::mem::take(&mut self.candidates);
         let ready_objects = std::mem::take(&mut self.ready_for_finalize);
         ret.extend(ready_objects);
@@ -109,10 +115,18 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         // We removed objects from candidates. Reset nursery_index
         self.nursery_index = 0;
 
+        for f in &ret {
+            mmtk.get_plan().release_gc_bookkeeping(f.get_reference(), mmtk);
+        }
+
         ret
     }
 
-    pub fn get_finalizers_for(&mut self, object: ObjectReference) -> Vec<F> {
+    pub fn get_finalizers_for<VM: VMBinding>(
+        &mut self,
+        mmtk: &'static MMTK<VM>,
+        object: ObjectReference,
+    ) -> Vec<F> {
         // Drain filter for finalizers that equal to 'object':
         // * for elements that equal to 'object', they will be removed from the original vec, and returned.
         // * for elements that do not equal to 'object', they will be left in the original vec.
@@ -135,6 +149,10 @@ impl<F: Finalizable> FinalizableProcessor<F> {
 
         // We removed objects from candidates. Reset nursery_index
         self.nursery_index = 0;
+
+        for f in &ret {
+            mmtk.get_plan().release_gc_bookkeeping(f.get_reference(), mmtk);
+        }
 
         ret
     }

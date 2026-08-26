@@ -41,9 +41,17 @@ impl ReferenceProcessors {
         }
     }
 
-    pub fn add_soft_candidate(&self, reff: ObjectReference) -> bool {
+    pub fn add_soft_candidate<VM: VMBinding>(&self, mmtk: &MMTK<VM>, reff: ObjectReference) {
         trace!("Add soft candidate: {}", reff);
-        self.soft.add_candidate(reff)
+        if self.soft.add_candidate(reff) {
+            // Only soft references get their referent held: weak/phantom referents must be free
+            // to die naturally (that's the whole point of those semantics), and are never
+            // traced/resurrected by `SoftRefProcessing::retain_soft_refs`, so they don't need
+            // this -- see the matching release in `ReferenceProcessor::process_reference`.
+            if let Some(referent) = VM::VMReferenceGlue::get_referent(reff) {
+                mmtk.get_plan().retain_for_gc_bookkeeping(referent);
+            }
+        }
     }
 
     pub fn add_weak_candidate(&self, reff: ObjectReference) -> bool {

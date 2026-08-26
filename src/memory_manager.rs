@@ -25,7 +25,6 @@ use crate::util::heap::layout::vm_layout::vm_layout;
 use crate::util::opaque_pointer::*;
 use crate::util::{Address, ObjectReference};
 use crate::vm::slot::MemorySlice;
-use crate::vm::Finalizable;
 use crate::vm::ReferenceGlue;
 use crate::vm::VMBinding;
 
@@ -824,16 +823,6 @@ pub fn add_weak_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReference)
     mmtk.reference_processors.add_weak_candidate(reff);
 }
 
-fn retain_referent_on_new_soft_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReference) {
-    // Only soft references get their referent held: weak/phantom referents must be free to die
-    // naturally (that's the whole point of those semantics), and are never traced/resurrected by
-    // `SoftRefProcessing::retain_soft_refs`, so they don't need this -- see the matching release
-    // in `ReferenceProcessor::process_reference`.
-    if let Some(referent) = VM::VMReferenceGlue::get_referent(reff) {
-        mmtk.get_plan().retain_for_gc_bookkeeping(referent);
-    }
-}
-
 /// Add a reference to the list of soft references. A binding may
 /// call this either when a weak reference is created, or when a weak reference is traced during GC.
 ///
@@ -841,9 +830,7 @@ fn retain_referent_on_new_soft_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: O
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `reff`: The soft reference to add.
 pub fn add_soft_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReference) {
-    if mmtk.reference_processors.add_soft_candidate(reff) {
-        retain_referent_on_new_soft_candidate(mmtk, reff);
-    }
+    mmtk.reference_processors.add_soft_candidate(mmtk, reff);
 }
 
 /// Add a reference to the list of phantom references. A binding may
@@ -890,9 +877,10 @@ pub fn add_finalizer<VM: VMBinding>(
         warn!("add_finalizer() is called when no_finalizer = true");
     }
 
-    mmtk.get_plan()
-        .retain_for_gc_bookkeeping(object.get_reference());
-    mmtk.finalizable_processor.lock().unwrap().add(object);
+    mmtk.finalizable_processor
+        .lock()
+        .unwrap()
+        .add(mmtk, object);
 }
 
 /// Pin an object. MMTk will make sure that the object does not move
@@ -951,11 +939,10 @@ pub fn get_finalized_object<VM: VMBinding>(
         warn!("get_finalized_object() is called when no_finalizer = true");
     }
 
-    let obj = mmtk.finalizable_processor.lock().unwrap().get_ready_object();
-    if let Some(f) = obj.as_ref() {
-        mmtk.get_plan().release_gc_bookkeeping(f.get_reference(), mmtk);
-    }
-    obj
+    mmtk.finalizable_processor
+        .lock()
+        .unwrap()
+        .get_ready_object(mmtk)
 }
 
 /// Pop all the finalizers that were registered for finalization. The returned objects may or may not be ready for
@@ -972,11 +959,10 @@ pub fn get_all_finalizers<VM: VMBinding>(
         warn!("get_all_finalizers() is called when no_finalizer = true");
     }
 
-    let all = mmtk.finalizable_processor.lock().unwrap().get_all_finalizers();
-    for f in &all {
-        mmtk.get_plan().release_gc_bookkeeping(f.get_reference(), mmtk);
-    }
-    all
+    mmtk.finalizable_processor
+        .lock()
+        .unwrap()
+        .get_all_finalizers(mmtk)
 }
 
 /// Pop finalizers that were registered and associated with a certain object. The returned objects may or may not be ready for finalization.
@@ -993,15 +979,10 @@ pub fn get_finalizers_for<VM: VMBinding>(
         warn!("get_finalizers() is called when no_finalizer = true");
     }
 
-    let fs = mmtk
-        .finalizable_processor
+    mmtk.finalizable_processor
         .lock()
         .unwrap()
-        .get_finalizers_for(object);
-    for f in &fs {
-        mmtk.get_plan().release_gc_bookkeeping(f.get_reference(), mmtk);
-    }
-    fs
+        .get_finalizers_for(mmtk, object)
 }
 
 /// Get the number of workers. MMTk spawns worker threads for the 'threads' defined in the options.
