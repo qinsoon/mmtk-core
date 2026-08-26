@@ -339,6 +339,7 @@ impl<VM: VMBinding, const FULL_GC: bool> LXRStopTheWorldProcessEdges<VM, FULL_GC
         if WEAK_ROOT && !Block::containing(object).is_defrag_source() {
             return object;
         }
+        let object = object.get_forwarded_object().unwrap_or(object);
         let x = if self.lxr.immix_space.in_space(object) {
             let pause = self.pause;
             let worker = self.worker();
