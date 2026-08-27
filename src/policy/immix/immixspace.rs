@@ -817,12 +817,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         object: ObjectReference,
     ) -> ObjectReference {
         if self.attempt_mark(object) {
-            let addr = object.to_raw_address().as_usize();
-            let straddle = if (addr & 0b11110000) == 0 {
-                self.rc.object_is_in_straddle_line_no_rc_check(object)
-            } else {
-                false
-            };
+            let straddle = self.rc.object_is_in_straddle_line_no_rc_check(object);
             if !straddle {
                 queue.enqueue(object);
             }

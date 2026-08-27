@@ -162,16 +162,24 @@ impl<VM: VMBinding, const KIND: EdgeKind> ProcessIncs<VM, KIND> {
             }
             o.to_raw_address().unlog_field_relaxed::<VM>();
         } else if in_place_promotion {
-            let header_size = if VM::VMObjectModel::COMPRESSED_PTR_ENABLED {
-                12usize
-            } else {
-                16
-            };
+            // Arm every unlog bit covering the object, starting from the granule that holds its
+            // first byte.
+            //
+            // This used to start from `o + header_size` and then align *down*, meaning to skip
+            // the header. But aligning down never moves forward, so whenever `o + header_size`
+            // landed in the next granule -- i.e. whenever the reference address sits in the last
+            // `header_size` bytes of one -- arming began one granule late and the bits covering
+            // the object's first fields were never armed at all. A recycled line has those bits
+            // cleared to `LOGGED`, so the barrier then treated those fields as already
+            // snapshotted for the rest of the program: no decrement, no increment, and the
+            // reference stored there was never counted.
+            //
+            // Over-arming is harmless -- it only makes the barrier record a field it need not --
+            // so cover the whole allocation and let the granule rounding fall where it may.
             let step = heap_bytes_per_unlog_byte << 2;
-            let end = o.to_raw_address() + size;
-            let aligned_end = end.align_up(step);
-            let cursor = o.to_raw_address() + header_size;
-            let mut cursor = cursor.align_down(step);
+            let start = VM::VMObjectModel::ref_to_object_start(o);
+            let aligned_end = (start + size).align_up(step);
+            let mut cursor = start.align_down(step);
             let mut meta = side_metadata::address_to_meta_address(&Self::UNLOG_BITS, cursor);
             while cursor < aligned_end {
                 unsafe { meta.store(0xffffffffu32) }

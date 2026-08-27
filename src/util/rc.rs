@@ -216,34 +216,125 @@ impl<VM: VMBinding> RefCountHelper<VM> {
         v == 0 || v == MAX_REF_COUNT
     }
 
+    /// The bit within a line's `RC_STRADDLE_LINES` value that records occupancy at address `a`,
+    /// or `None` if a synthetic mark can never sit at `a`'s position within its line.
+    ///
+    /// Bit 0 covers a line's own start: the mark used when a straddling object's body fully or
+    /// partially spans the line (see `mark_straddle_object_with_size`). Bits `1..=K`, where `K =
+    /// ceil(OBJECT_REF_OFFSET_UPPER_BOUND / MIN_OBJECT_SIZE)`, cover the `K` granules trailing a
+    /// line, counting backward from the last granule (bit 1) -- the only positions a header mark
+    /// can ever land on when the VM's reference address trails the allocation start by up to
+    /// `OBJECT_REF_OFFSET_UPPER_BOUND` bytes. Every other granule in a line can never hold a mark
+    /// of either kind, so it is always treated as a real object with no metadata lookup at all.
+    ///
+    /// For a VM with `OBJECT_REF_OFFSET_UPPER_BOUND == 0` (the default), `K == 0` and only bit 0
+    /// is ever used, matching the pre-Julia design where reference address and allocation start
+    /// coincide and only the line-start mark exists.
+    fn straddle_bit(a: Address) -> Option<usize> {
+        let line = Line::from_unaligned_address(a);
+        let offset_in_line = a - line.start();
+        if offset_in_line == 0 {
+            return Some(0);
+        }
+        let trailing_granules = (VM::VMObjectModel::OBJECT_REF_OFFSET_UPPER_BOUND as usize)
+            .saturating_add(MIN_OBJECT_SIZE - 1)
+            / MIN_OBJECT_SIZE;
+        let dist_from_end = (Line::BYTES - offset_in_line) / MIN_OBJECT_SIZE;
+        (dist_from_end >= 1 && dist_from_end <= trailing_granules).then_some(dist_from_end)
+    }
+
     /// Returns `true` if object `o` is in a straddle line. The function does not check rc table.
+    ///
+    /// When `UNIFIED_OBJECT_REFERENCE_ADDRESS` is true (reference address == allocation start,
+    /// true of most VMs), `straddle_bit` only ever resolves at a line's own start -- its trailing
+    /// granules are always empty, since `OBJECT_REF_OFFSET_UPPER_BOUND` defaults to 0 -- so this
+    /// is that same check with the trailing-granule arithmetic skipped. The position check is
+    /// not optional, even here: `mark_straddle_object_with_size` marks a straddling object's tail
+    /// line even when the object does not fill it, so a marked line can still hold an unrelated,
+    /// ordinary object elsewhere in it. Checking only "is this line marked at all" -- i.e.
+    /// dropping the position check -- would misclassify that object as a straddle mark; this is
+    /// true for every VM, not just one with a trailing-granule case to worry about, and is why
+    /// upstream's original one-byte-per-line design already needed `mark_straddle_object_with_size`
+    /// to leave the tail line unmarked in the first place (relying on the hole finder's own
+    /// margin instead) rather than checking position here.
+    ///
+    /// Otherwise, positions that can never hold a mark (see `straddle_bit`) are recognised for
+    /// free, from `o`'s address alone, with no metadata access. Only the handful of positions
+    /// that could plausibly hold one -- a line's own start, or the few granules trailing it that
+    /// `OBJECT_REF_OFFSET_UPPER_BOUND` makes reachable by a header -- consult the per-line bit.
     pub fn object_is_in_straddle_line_no_rc_check(&self, o: ObjectReference) -> bool {
-        // This directly reads line-granularity straddle line metadata with an unaligned address.
-        // It is still correct, but may break side metadata assertions.
-        unsafe { RC_STRADDLE_LINES.load::<u8>(o.to_raw_address()) != 0 }
+        let a = o.to_raw_address();
+        if VM::VMObjectModel::UNIFIED_OBJECT_REFERENCE_ADDRESS {
+            if !Line::is_aligned(a) {
+                return false;
+            }
+            let v: u8 = RC_STRADDLE_LINES.load_atomic(a, Ordering::Relaxed);
+            return v != 0;
+        }
+        let Some(bit) = Self::straddle_bit(a) else {
+            return false;
+        };
+        let line = Line::from_unaligned_address(a);
+        let v: u8 = RC_STRADDLE_LINES.load_atomic(line.start(), Ordering::Relaxed);
+        (v >> bit) & 1 != 0
     }
 
     /// Returns `true` if address `a` falls within a live object whose containing line is marked
     /// as a straddle line.
     pub fn object_is_in_straddle_line(&self, o: ObjectReference) -> bool {
-        let line = Line::from_unaligned_address(o.to_raw_address());
-        self.count(o) != 0 && unsafe { RC_STRADDLE_LINES.load::<u8>(line.start()) != 0 }
+        self.count(o) != 0 && self.object_is_in_straddle_line_no_rc_check(o)
     }
 
-    fn mark_straddle_object_with_size(&self, o: ObjectReference, size: usize) {
-        debug_assert!(size > Line::BYTES);
+    /// Marks (`MARK == true`) or unmarks (`MARK == false`) every line an object occupies other
+    /// than the one holding its own count, so the object can be identified from any of them.
+    /// `mark_straddle_object`/`promote*` and `unmark_straddle_object` share this one
+    /// implementation so the two directions can never cover different sets of lines -- they used
+    /// to be separate, near-duplicate loops, and drifted: one covered a wider set of lines than
+    /// the other, leaving marks that were set but never cleared.
+    ///
+    /// The hole finder treats a line as free when all of its counts are zero, so every line an
+    /// object touches needs one. Only the line containing the object's reference address gets one
+    /// naturally. That leaves two gaps: the line holding the header, when the VM places the
+    /// reference address after the start of the allocation (Julia does), and any further line the
+    /// object runs into. The latter is not limited to objects longer than a line -- a 208-byte
+    /// object crossing a boundary spans two -- which is why this no longer guards on `size >
+    /// Line::BYTES` the way `mark_straddle_object_with_size` used to.
+    ///
+    /// Each such count is *synthetic*: it stands for "this line is occupied", not for an object
+    /// beginning there. `SweepDeadCycles` linear-scans the reference-count table and would
+    /// otherwise take one for an object start and try to size it, reading a type tag from
+    /// whatever precedes it. So each synthetic count is paired with a straddle bit at *the mark's
+    /// own address*, which is what tells the sweeper the two apart. That bit is set and cleared
+    /// with an atomic fetch_or/fetch_and on `RC_STRADDLE_LINES` (see `straddle_bit`), never a
+    /// plain store: two objects can touch one line -- one object's header mark can share a line
+    /// with another object's real reference address, or with a second, unrelated header mark --
+    /// and each needs its own bit within the line's value, independently settable and clearable,
+    /// or one dying object's unmark would clobber a still-live one's mark (or a live object's own
+    /// reference address could be misread as synthetic).
+    fn mark_straddle_object_with_size<const MARK: bool>(&self, o: ObjectReference, size: usize) {
         let start = o.to_object_start::<VM>();
-        let end = start + size;
-        let start_line = Line::from_unaligned_address(start).next();
-        let end_line = Line::from_unaligned_address(end);
-        // Note that `end_line` may be the last line overlapping with `o`.
-        // In that case, `end_line` will not be marked.
-        // It is OK because when searching for available lines (`rc_get_next_available_lines`),
-        // it always skips the first line in a hole.
-        let mut line = start_line;
+        let ref_line = Line::from_unaligned_address(o.to_raw_address());
+        let first_line = Line::from_unaligned_address(start);
+        // The end is exclusive, so it has to be the line *after* the one holding the
+        // object's last byte. Rounding the end address down instead leaves the final line
+        // unmarked whenever the object does not finish exactly on a line boundary: its
+        // counts stay zero, the hole finder reads the line as free, and the allocator hands
+        // out memory the object is still occupying.
+        let end_line = Line::from_unaligned_address(start + (size - 1)).next();
+        let v = if MARK { 1u8 } else { 0u8 };
+        // The first line's start may precede the object and so may belong to a different
+        // object; record against the header word instead, which cannot. Every later line
+        // begins inside this object, so its start is safe to use.
+        if first_line != ref_line {
+            unsafe { RC_TABLE.store(start, v) };
+            self.set_straddle_bit::<MARK>(start);
+        }
+        let mut line = first_line.next();
         while line != end_line {
-            unsafe { RC_STRADDLE_LINES.store(line.start(), 1u8) };
-            self.set_line_relaxed(line, 1);
+            if line != ref_line {
+                self.set_line_relaxed(line, v);
+                self.set_straddle_bit::<MARK>(line.start());
+            }
             line = line.next();
         }
     }
@@ -252,30 +343,14 @@ impl<VM: VMBinding> RefCountHelper<VM> {
     /// object can be identified from any of the lines it straddles.
     pub fn mark_straddle_object(&self, o: ObjectReference) {
         let size = VM::VMObjectModel::get_current_size(o);
-        self.mark_straddle_object_with_size(o, size)
+        self.mark_straddle_object_with_size::<true>(o, size)
     }
 
     /// Clears the straddle-line and reference-count markers set by `mark_straddle_object` for
     /// every line (other than the first) spanned by object `o`.
     pub fn unmark_straddle_object(&self, o: ObjectReference) {
-        // debug_assert!(crate::args::RC_NURSERY_EVACUATION);
         let size = VM::VMObjectModel::get_current_size(o);
-        if size > Line::BYTES {
-            let start = o.to_object_start::<VM>();
-            let end = start + size;
-            let start_line = Line::from_unaligned_address(start).next();
-            let end_line = Line::from_unaligned_address(end);
-            // Note that `end_line` may be the last line overlapping with `o`.
-            // In that case, `end_line` will not be marked.
-            // It is OK because when searching for available lines (`rc_get_next_available_lines`),
-            // it always skips the first line in a hole.
-            let mut line = start_line;
-            while line != end_line {
-                self.set_line_relaxed(line, 0);
-                unsafe { RC_STRADDLE_LINES.store(line.start(), 0u8) };
-                line = line.next();
-            }
-        }
+        self.mark_straddle_object_with_size::<false>(o, size);
     }
 
     /// Debug assertion that every `MIN_OBJECT_SIZE` granule within object `o` has a reference
@@ -292,16 +367,40 @@ impl<VM: VMBinding> RefCountHelper<VM> {
     /// spans more than one line, deriving its size from the VM binding.
     pub fn promote(&self, o: ObjectReference) {
         let size = o.get_size::<VM>();
-        if size > Line::BYTES {
-            self.mark_straddle_object_with_size(o, size);
-        }
+        self.mark_straddle_object_with_size::<true>(o, size);
     }
 
     /// Same as `promote`, but with the object's size supplied by the caller instead of being
     /// queried from the VM binding.
     pub fn promote_with_size(&self, o: ObjectReference, size: usize) {
-        if size > Line::BYTES {
-            self.mark_straddle_object_with_size(o, size);
+        self.mark_straddle_object_with_size::<true>(o, size);
+    }
+
+    /// Set or clear, atomically, the mark that records occupancy at `a`.
+    ///
+    /// Only called from `mark_straddle_object_with_size` with an address `straddle_bit` is
+    /// guaranteed to resolve: `line.start()` always resolves (bit 0), and `start` (the header
+    /// case) only reaches here when `first_line != ref_line`, which by the
+    /// `OBJECT_REF_OFFSET_UPPER_BOUND` invariant means `start` is within the trailing granules
+    /// `straddle_bit` covers.
+    ///
+    /// When `UNIFIED_OBJECT_REFERENCE_ADDRESS` is true, `mark_straddle_object_with_size` never
+    /// takes the header-case branch, so `a` is always exactly `line.start()` here (bit 0) --
+    /// unlike the query side, there is no separate position check needed on the write side,
+    /// because the caller already guarantees the position is correct. Still atomic, to stay
+    /// synchronized with the query side's atomic load of the same byte.
+    fn set_straddle_bit<const MARK: bool>(&self, a: Address) {
+        if VM::VMObjectModel::UNIFIED_OBJECT_REFERENCE_ADDRESS {
+            RC_STRADDLE_LINES.store_atomic::<u8>(a, if MARK { 1u8 } else { 0u8 }, Ordering::Relaxed);
+            return;
+        }
+        let bit = Self::straddle_bit(a).unwrap();
+        let line = Line::from_unaligned_address(a);
+        let mask = 1u8 << bit;
+        if MARK {
+            RC_STRADDLE_LINES.fetch_or_atomic::<u8>(line.start(), mask, Ordering::Relaxed);
+        } else {
+            RC_STRADDLE_LINES.fetch_and_atomic::<u8>(line.start(), !mask, Ordering::Relaxed);
         }
     }
 }

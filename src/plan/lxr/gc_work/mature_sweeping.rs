@@ -3,7 +3,6 @@ use std::sync::atomic::Ordering;
 
 use crate::plan::lxr::{LazySweepingJobsCounter, LXR};
 use crate::policy::immix::block::{Block, BlockState};
-use crate::policy::immix::line::Line;
 use crate::policy::immix::ImmixSpace;
 use crate::scheduler::{GCWork, GCWorker};
 use crate::util::heap::chunk_map::Chunk;
@@ -62,17 +61,14 @@ impl<VM: VMBinding> SweepDeadCycles<VM> {
                 // Safety: cur_cursor is either a valid object reference, or a straddle line
                 let o = unsafe { ObjectReference::from_raw_address_unchecked(cur_cursor) };
                 if !immix_space.is_marked(o) {
-                    if Line::is_aligned(o.to_raw_address()) {
-                        if c == 1 && self.rc.object_is_in_straddle_line_no_rc_check(o) {
-                            // this is a straddle line, skip
-                            continue;
-                        } else {
-                            // Now o is a valid object reference
-                            std::sync::atomic::fence(Ordering::SeqCst);
-                            if self.rc.count(o) == 0 {
-                                continue;
-                            }
-                        }
+                    if c == 1 && self.rc.object_is_in_straddle_line_no_rc_check(o) {
+                        // this is a straddle line, skip
+                        continue;
+                    }
+                    // Now o is a valid object reference
+                    std::sync::atomic::fence(Ordering::SeqCst);
+                    if self.rc.count(o) == 0 {
+                        continue;
                     }
                     // o is still a valid object here.
                     self.process_dead_object(o);
