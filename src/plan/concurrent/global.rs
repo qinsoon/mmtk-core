@@ -1,5 +1,6 @@
 use crate::plan::concurrent::Pause;
 use crate::plan::Plan;
+use crate::vm::{Collection, VMBinding};
 
 /// Trait for a concurrent plan.
 pub trait ConcurrentPlan: Plan {
@@ -12,4 +13,18 @@ pub trait ConcurrentPlan: Plan {
     /// Called when the concurrent phase's work packets have drained: every GC worker has parked,
     /// so nothing is in progress, and no pause has been requested.
     fn on_concurrent_work_drained(&self);
+
+    /// Leave `GcStatus::InConcurrentGC` because the concurrent phase ended without a pause, and
+    /// tell the VM.  Plans call this from [`Self::on_concurrent_work_drained`] once no concurrent
+    /// work is left.  Does nothing if a pause has been requested in the meantime.
+    fn finish_concurrent_work_without_pause(&self) {
+        if self
+            .base()
+            .global_state
+            .gc_status
+            .set_concurrent_gc_finished()
+        {
+            <Self::VM as VMBinding>::VMCollection::concurrent_work_finished_no_pause();
+        }
+    }
 }

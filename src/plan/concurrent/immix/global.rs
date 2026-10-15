@@ -38,7 +38,8 @@ use enum_map::EnumMap;
 use mmtk_macros::{HasSpaces, PlanTraceObject};
 
 /// A concurrent Immix plan. The plan supports concurrent collection (strictly non-moving) and STW full heap collection (which may do defrag).
-/// The concurrent GC consists of two STW pauses (initial mark and final mark) with concurrent marking in between.
+/// The concurrent GC consists of two STW pauses (initial mark and final mark) with concurrent marking in between,
+/// followed by concurrent sweeping of the ImmixSpace after the final mark.
 #[derive(HasSpaces, PlanTraceObject)]
 pub struct ConcurrentImmix<VM: VMBinding> {
     #[post_scan]
@@ -53,6 +54,11 @@ pub struct ConcurrentImmix<VM: VMBinding> {
     should_do_full_gc: AtomicBool,
     concurrent_marking_active: AtomicBool,
     unfinished_concurrent_marking: AtomicBool,
+    /// `true` from the `Release` stage of a `FinalMark` pause until the ImmixSpace has been
+    /// swept concurrently.
+    concurrent_sweeping_active: AtomicBool,
+    /// A mutator found the heap full during concurrent sweeping.  See `collection_required`.
+    heap_full_during_sweeping: AtomicBool,
 }
 
 /// The plan constraints for the concurrent immix plan.
@@ -70,8 +76,14 @@ pub const CONCURRENT_IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
 impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
     fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
         if self.base().collection_required(self, space_full) {
-            self.should_do_full_gc.store(true, Ordering::Release);
-            info!("Triggering full GC");
+            if self.concurrent_sweeping_in_progress() {
+                // The heap still holds the garbage being swept.  The pause waits for sweeping to
+                // finish, and `schedule_collection` checks again whether the heap is full.
+                self.heap_full_during_sweeping.store(true, Ordering::SeqCst);
+            } else {
+                self.should_do_full_gc.store(true, Ordering::Release);
+                info!("Triggering full GC");
+            }
             return true;
         }
 
@@ -90,6 +102,12 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
 
         // If concurrent marking is disbled, no need to check further.
         if self.concurrent_marking_is_disabled() {
+            return false;
+        }
+
+        // Do not start the next concurrent marking cycle before the last one finished sweeping.
+        // Its line and block states are not ready for marking until then.
+        if self.concurrent_sweeping_in_progress() {
             return false;
         }
 
@@ -139,6 +157,20 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
         // In those cases, we also want to force a full GC.
         if self.concurrent_marking_is_disabled() {
             self.should_do_full_gc.store(true, Ordering::SeqCst);
+        }
+
+        // Concurrent sweeping has finished before this pause (see `on_pause_start`).  If a mutator
+        // found the heap full during sweeping, do a full GC only if the heap is still full.
+        // Otherwise, start the next concurrent cycle.
+        if self.heap_full_during_sweeping.swap(false, Ordering::SeqCst) {
+            if self.base().gc_trigger.is_heap_full()
+                || self.base().global_state.is_emergency_collection()
+            {
+                info!("Triggering full GC");
+                self.should_do_full_gc.store(true, Ordering::SeqCst);
+            } else {
+                info!("The heap is no longer full after concurrent sweeping");
+            }
         }
 
         let pause = if self.concurrent_marking_in_progress() {
@@ -216,11 +248,15 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
         match pause {
             Pause::InitialMark => (),
             Pause::Full | Pause::FinalMark => {
-                self.immix_space.release(
-                    true,
-                    // Bulk clear log bits so SATB barrier will not be triggered.
-                    UnlogBitsOperation::BulkClear,
-                );
+                // Bulk clear log bits so SATB barrier will not be triggered.
+                let unlog_bits_op = UnlogBitsOperation::BulkClear;
+                if pause == Pause::FinalMark && self.should_sweep_concurrently() {
+                    // Clearing log bits concurrently is fine. Mutators drop the SATB entries
+                    // recorded when hitting the slow path after concurrent marking.
+                    self.release_for_concurrent_sweeping(unlog_bits_op);
+                } else {
+                    self.immix_space.release(true, unlog_bits_op);
+                }
 
                 self.common.release(tls, true);
 
@@ -270,8 +306,9 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
         }
 
         // Every pause ends a GC cycle, except `InitialMark`, which is followed by concurrent
-        // marking and a `FinalMark` pause before the cycle ends.
-        if pause != Pause::InitialMark {
+        // marking and a `FinalMark` pause before the cycle ends, and a `FinalMark` followed by
+        // concurrent sweeping, which ends the cycle when it finishes.
+        if pause != Pause::InitialMark && !self.concurrent_sweeping_in_progress() {
             mmtk.gc_trigger.policy.on_gc_end(mmtk);
         }
 
@@ -304,7 +341,25 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
 
     fn on_pause_start(&self, mmtk: &'static MMTK<VM>) {
         use crate::vm::ActivePlan;
+
+        // A pause requested during concurrent sweeping waits for GC workers to drain the
+        // `Concurrent` bucket (see `on_concurrent_work_interrupted`), and the last sweeping packet
+        // has called `on_concurrent_sweeping_finished`.
+        assert!(
+            !self.concurrent_sweeping_in_progress(),
+            "A pause started during concurrent sweeping"
+        );
+
         let pause = self.current_pause().unwrap();
+        if pause != Pause::FinalMark {
+            // If the last cycle swept concurrently, nothing has disabled the `Concurrent` bucket
+            // since then.  Disable it, or the concurrent marking packets that `InitialMark`
+            // creates would be executed in the pause.  The scheduler enables it at the end of the
+            // pause if it holds work.
+            let concurrent_bucket = &mmtk.scheduler.work_buckets[WorkBucketStage::Concurrent];
+            debug_assert!(concurrent_bucket.is_empty());
+            concurrent_bucket.set_enabled(false);
+        }
         match pause {
             Pause::Full => {
                 self.set_concurrent_marking_state(false);
@@ -400,6 +455,8 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
             should_do_full_gc: AtomicBool::new(false),
             concurrent_marking_active: AtomicBool::new(false),
             unfinished_concurrent_marking: AtomicBool::new(false),
+            concurrent_sweeping_active: AtomicBool::new(false),
+            heap_full_during_sweeping: AtomicBool::new(false),
         }
     }
 
@@ -502,6 +559,79 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
         self.concurrent_marking_active.load(Ordering::SeqCst)
     }
 
+    pub fn concurrent_sweeping_in_progress(&self) -> bool {
+        self.concurrent_sweeping_active.load(Ordering::Acquire)
+    }
+
+    /// Return `true` if the current `FinalMark` pause should leave sweeping the ImmixSpace to
+    /// GC workers running concurrently with mutators.
+    fn should_sweep_concurrently(&self) -> bool {
+        let global_state = &self.base().global_state;
+        !*self
+            .base()
+            .options
+            .concurrent_immix_disable_concurrent_sweeping
+            // Sweeping keeps new blocks alive by their line marks, which block-only Immix ignores.
+            && !crate::policy::immix::BLOCK_ONLY
+            // Sweeping updates the VO bits of the blocks it sweeps, but mutators would be setting
+            // VO bits of the objects they allocate at the same time.
+            && !cfg!(feature = "vo_bit")
+            // If the heap is full, or the user or an emergency asked for memory, mutators need the
+            // memory as soon as they resume.  Sweep in the pause.
+            && !self.should_do_full_gc.load(Ordering::SeqCst)
+            && !global_state.is_user_triggered_collection()
+            && !global_state.is_emergency_collection()
+    }
+
+    /// Called in the `Release` stage of a `FinalMark` pause.  Defer the work packets that sweep
+    /// the ImmixSpace to the `Concurrent` bucket, so that GC workers execute them after the pause,
+    /// concurrently with mutators.
+    fn release_for_concurrent_sweeping(&mut self, unlog_bits_op: UnlogBitsOperation) {
+        let sweep_work = self.immix_space.release_for_concurrent_sweeping(
+            unlog_bits_op,
+            Box::new(|mmtk: &'static MMTK<VM>| {
+                let plan = mmtk.get_plan().downcast_ref::<Self>().unwrap();
+                plan.on_concurrent_sweeping_finished(mmtk);
+            }),
+        );
+        if sweep_work.is_empty() {
+            return;
+        }
+        // See `ImmixSpace::release_for_concurrent_sweeping`.  Blocks that mutators acquire before
+        // the sweeping packets reach them must look live to the sweeping packets.
+        self.immix_space.set_allocate_as_live(true);
+        self.concurrent_sweeping_active
+            .store(true, Ordering::SeqCst);
+        // The bucket is open during `FinalMark` to process the SATB buffers flushed at its start.
+        // Deferred packets wait until the scheduler activates them at the end of the pause.
+        self.common.base.scheduler.work_buckets[WorkBucketStage::Concurrent]
+            .bulk_add_deferred(sweep_work);
+        info!("Concurrent sweeping scheduled");
+    }
+
+    /// Called by the last sweeping packet, concurrently with mutators, once the ImmixSpace has been
+    /// swept.  Ends the GC cycle of the last `FinalMark` pause.
+    fn on_concurrent_sweeping_finished(&self, mmtk: &'static MMTK<VM>) {
+        debug_assert!(self.concurrent_sweeping_in_progress());
+        self.immix_space.set_allocate_as_live(false);
+        self.concurrent_sweeping_active
+            .store(false, Ordering::SeqCst);
+
+        // The used pages recorded at the end of `FinalMark` still included the garbage in the
+        // ImmixSpace.  Don't count it as allocation when deciding the next `InitialMark`.
+        let global_state = &self.base().global_state;
+        let released_pages = self.immix_space.get_pages_released_by_sweeping();
+        global_state.set_used_pages_after_last_gc(
+            global_state
+                .get_used_pages_after_last_gc()
+                .saturating_sub(released_pages),
+        );
+
+        mmtk.gc_trigger.policy.on_gc_end(mmtk);
+
+        info!("Concurrent sweeping finished ({released_pages} pages released)");
+    }
+
     fn previous_pause(&self) -> Option<Pause> {
         self.previous_pause.load(Ordering::SeqCst)
     }
@@ -524,6 +654,13 @@ impl<VM: VMBinding> ConcurrentPlan for ConcurrentImmix<VM> {
     }
 
     fn on_concurrent_work_interrupted(&self) {
+        if !self.concurrent_marking_in_progress() {
+            // The concurrent work is sweeping.  Leave the `Concurrent` bucket enabled so that GC
+            // workers finish sweeping before the requested pause starts.  The pause must not
+            // start before sweeping finishes (see `ImmixSpace::release_for_concurrent_sweeping`),
+            // and finishing it while mutators still run keeps it out of the pause.
+            return;
+        }
         assert!(!self.unfinished_concurrent_marking.load(Ordering::SeqCst));
         // A pause is requested when we are doing concurrent marking.
         // Set concurrent bucket as disabled now. Later (during collection scheduling),
@@ -535,7 +672,15 @@ impl<VM: VMBinding> ConcurrentPlan for ConcurrentImmix<VM> {
     }
 
     fn on_concurrent_work_drained(&self) {
-        // Concurrent marking is the only concurrent work this plan schedules, and it always ends
-        // in a `FinalMark` pause. Nothing to do here.
+        // Concurrent marking always ends in a `FinalMark` pause. Nothing to do here.
+        if self.concurrent_marking_in_progress() {
+            return;
+        }
+        // Otherwise, the concurrent work was sweeping, and no pause follows it.
+        debug_assert!(
+            !self.concurrent_sweeping_in_progress(),
+            "Concurrent sweeping is not finished with every GC worker parked and no work left"
+        );
+        self.finish_concurrent_work_without_pause();
     }
 }

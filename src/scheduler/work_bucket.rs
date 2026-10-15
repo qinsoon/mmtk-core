@@ -76,6 +76,17 @@ impl<VM: VMBinding> BucketQueue<VM> {
         }
     }
 
+    /// Move the packets in the inactive queue to the active queue.
+    fn activate_inactive(&self) {
+        loop {
+            match self.inactive_queue().steal() {
+                Steal::Success(w) => self.active_queue().push(w),
+                Steal::Retry => continue,
+                Steal::Empty => break,
+            }
+        }
+    }
+
     /// Remove and return every packet currently in this queue, leaving it empty.
     fn drain(&self) -> Vec<Box<dyn GCWork<VM>>> {
         let mut items = Vec::new();
@@ -187,6 +198,13 @@ impl<VM: VMBinding> WorkBucket<VM> {
 
     pub fn flip(&self) {
         self.queue.flag.fetch_xor(true, Ordering::SeqCst);
+    }
+
+    /// Make the packets added by [`WorkBucket::add_deferred`] and
+    /// [`WorkBucket::bulk_add_deferred`] available to workers.  Unlike [`WorkBucket::flip`], the
+    /// packets that are already available stay available.
+    pub(crate) fn activate_deferred(&self) {
+        self.queue.activate_inactive();
     }
 
     fn notify_one_worker(&self) {

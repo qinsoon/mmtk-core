@@ -718,6 +718,11 @@ impl ReusableBlockPool {
     pub fn flush_all(&self) {
         self.queue.flush_all();
     }
+
+    /// Flush the current GC worker's thread-local block queue.
+    pub fn flush_current_worker(&self) {
+        self.queue.flush_current_worker();
+    }
 }
 
 /// The result of sweeping a block.  Mainly used for statistics.

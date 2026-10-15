@@ -1011,6 +1011,8 @@ options! {
     immix_defrag_headroom_percent: usize            [|v: &usize| *v <= 50] = 5,
     /// Disable concurrent marking in ConcurrentImmix. Setting this to true will make ConcurrentImmix behave exactly like full heap Immix. This option is only intended for debugging.
     concurrent_immix_disable_concurrent_marking: bool              [always_valid] = false,
+    /// Disable concurrent sweeping in ConcurrentImmix. Setting this to true will make the FinalMark pause sweep the ImmixSpace before mutators resume. This option is only intended for debugging.
+    concurrent_immix_disable_concurrent_sweeping: bool             [always_valid] = false,
     /// Trigger an LXR pause once this many reference-count increments are pending, bounding the
     /// `RCProcessIncs` work a single pause has to do. Each pending increment is one slot the write
     /// barrier recorded, so the limit is roughly "words of reference stores between pauses".

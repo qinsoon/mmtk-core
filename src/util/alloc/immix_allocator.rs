@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap, AllocatorContext};
 use super::BumpPointer;
-use crate::policy::immix::block::Block;
 use crate::policy::immix::line::*;
 use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
@@ -317,22 +316,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.start(),
                     block.end()
                 );
-                // FIXME: Why don't we need this for LXR? Conix needs this.
-                if !self.immix_space().rc_enabled {
-                    // Bulk clear stale line mark state
-                    Line::MARK_TABLE
-                        .bzero_metadata(block.start(), crate::policy::immix::block::Block::BYTES);
-                    // mark objects if concurrent marking is active
-                    if self.immix_space().should_allocate_as_live() {
-                        let state = self.space.line_mark_state.load(Ordering::Acquire);
-                        Line::eager_mark_lines::<VM>(state, block.start_line()..block.end_line());
-                        // Objects allocated here are not in the SATB snapshot, log them
-                        if self.immix_space().common().needs_log_bit {
-                            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                                .bulk_mark_as_logged(block.start(), Block::BYTES);
-                        }
-                    }
-                }
+                // `ImmixSpace::get_clean_block` has initialized the line marks of the block.
                 if self.request_for_large {
                     self.large_bump_pointer.cursor = block.start();
                     self.large_bump_pointer.limit = block.end();

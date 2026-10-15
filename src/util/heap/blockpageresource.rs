@@ -177,6 +177,12 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         self.block_queue.flush_all()
         // TODO: For 32-bit space, we may want to free some contiguous chunks.
     }
+
+    /// Flush the current GC worker's thread-local queue of released blocks.  Unlike
+    /// [`Self::flush_all`], this is safe while other GC workers are releasing blocks.
+    pub fn flush_current_worker(&self) {
+        self.block_queue.flush_current_worker()
+    }
 }
 
 /// A block list that supports fast lock-free push/pop operations
@@ -385,6 +391,13 @@ impl<B: Region> BlockPool<B> {
                 self.global_freed_blocks.write().push(queue)
             }
         }
+    }
+
+    /// Flush the current GC worker's thread-local queue to the global pool.  Unlike
+    /// [`Self::flush_all`], this is safe while other GC workers are pushing blocks.
+    pub fn flush_current_worker(&self) {
+        let id = crate::scheduler::current_worker_ordinal().unwrap();
+        self.flush(id)
     }
 
     /// Flush all thread-local queues to the global pool

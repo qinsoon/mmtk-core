@@ -77,6 +77,8 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// How many lines have been consumed since last GC?
     lines_consumed: AtomicUsize,
     reused_lines_consumed: AtomicUsize,
+    /// How many blocks have been released by sweeping since the last `Release`?
+    blocks_released_by_sweeping: AtomicUsize,
     /// Object mark state
     mark_state: u8,
     /// Work packet scheduler
@@ -482,6 +484,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             line_unavail_state: AtomicU8::new(Line::RESET_MARK_STATE),
             lines_consumed: AtomicUsize::new(0),
             reused_lines_consumed: AtomicUsize::new(0),
+            blocks_released_by_sweeping: AtomicUsize::new(0),
             reusable_blocks: ReusableBlockPool::new(scheduler.num_workers()),
             defrag: Defrag::default(),
             // Set to the correct mark state when inititialized. We cannot rely on prepare to set it (prepare may get skipped in nursery GCs).
@@ -503,6 +506,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         #[cfg(target_pointer_width = "64")]
         self.pr.flush_all()
+    }
+
+    /// Flush the current GC worker's thread-local queues in BlockPageResource and the reusable
+    /// block list, making the blocks this worker released or swept available to allocators.
+    fn flush_page_resource_for_current_worker(&self) {
+        if !self.rc_enabled {
+            self.reusable_blocks.flush_current_worker();
+        }
+        #[cfg(target_pointer_width = "64")]
+        self.pr.flush_current_worker()
     }
 
     /// Get the number of defrag headroom pages.
@@ -679,6 +692,33 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Release for the immix space.
     pub(crate) fn release(&mut self, major_gc: bool, unlog_bits_op: UnlogBitsOperation) {
+        let work_packets = self.release_and_generate_sweep_tasks(major_gc, unlog_bits_op, None);
+        self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
+    }
+
+    /// Release for the immix space, but return the work packets that sweep the space instead of
+    /// scheduling them in the `Release` bucket.  The caller must execute them concurrently with
+    /// mutators after the current pause, and must uphold the following until they all finish:
+    ///
+    /// -   The space must allocate objects as live (see [`Space::set_allocate_as_live`]), so that
+    ///     the sweeping packets keep the blocks that allocators acquire in the meantime.
+    /// -   No GC pause may start.
+    ///
+    /// The last packet to finish calls `on_finished`.  It is not called if there are no packets.
+    pub(crate) fn release_for_concurrent_sweeping(
+        &mut self,
+        unlog_bits_op: UnlogBitsOperation,
+        on_finished: SweepFinishedCallback<VM>,
+    ) -> Vec<Box<dyn GCWork<VM>>> {
+        self.release_and_generate_sweep_tasks(true, unlog_bits_op, Some(on_finished))
+    }
+
+    fn release_and_generate_sweep_tasks(
+        &mut self,
+        major_gc: bool,
+        unlog_bits_op: UnlogBitsOperation,
+        on_concurrent_sweeping_finished: Option<SweepFinishedCallback<VM>>,
+    ) -> Vec<Box<dyn GCWork<VM>>> {
         debug_assert!(!self.rc_enabled);
         if major_gc {
             // Update line_unavail_state for hole searching after this GC.
@@ -693,11 +733,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if !super::BLOCK_ONLY {
             self.reusable_blocks.reset();
         }
-        // Sweep chunks and blocks
-        let work_packets = self.generate_sweep_tasks(unlog_bits_op);
-        self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
-
         self.lines_consumed.store(0, Ordering::Relaxed);
+
+        // Sweep chunks and blocks
+        self.generate_sweep_tasks(unlog_bits_op, on_concurrent_sweeping_finished)
     }
 
     /// This is called when a GC finished.
@@ -710,20 +749,29 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         did_defrag
     }
 
-    /// Generate chunk sweep tasks
-    fn generate_sweep_tasks(&self, unlog_bits_op: UnlogBitsOperation) -> Vec<Box<dyn GCWork<VM>>> {
+    /// Generate chunk sweep tasks.  They sweep concurrently with mutators if
+    /// `on_concurrent_sweeping_finished` is `Some`.
+    fn generate_sweep_tasks(
+        &self,
+        unlog_bits_op: UnlogBitsOperation,
+        on_concurrent_sweeping_finished: Option<SweepFinishedCallback<VM>>,
+    ) -> Vec<Box<dyn GCWork<VM>>> {
         self.defrag.mark_histograms.lock().clear();
+        self.blocks_released_by_sweeping.store(0, Ordering::Relaxed);
         // # Safety: ImmixSpace reference is always valid within this collection cycle.
         let space = unsafe { &*(self as *const Self) };
+        let concurrent = on_concurrent_sweeping_finished.is_some();
         let epilogue = Arc::new(FlushPageResource {
             space,
             counter: AtomicUsize::new(0),
+            on_finished: on_concurrent_sweeping_finished,
         });
         let tasks = self.chunk_map.generate_tasks(|chunk| {
             Box::new(SweepChunk {
                 space,
                 chunk,
                 unlog_bits_op,
+                concurrent,
                 epilogue: epilogue.clone(),
             })
         });
@@ -758,6 +806,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if let Some(hooks) = self.hooks() {
             hooks.on_clean_block_acquired(block, copy);
         }
+        if !self.rc_enabled {
+            // This must happen before `block.init` sets the block state.  Concurrent sweeping only
+            // skips blocks that are still unallocated, so once it can see the block, it must also
+            // see the line marks that keep it alive.
+            self.init_line_marks_for_clean_block(block);
+        }
         block.init(copy, false, self);
         self.chunk_map.set_allocated(block.chunk(), true);
         if !self.rc_enabled {
@@ -765,6 +819,30 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 .fetch_add(Block::LINES, Ordering::SeqCst);
         }
         Some(block)
+    }
+
+    /// Clear the stale line marks of a clean block, and mark all its lines if we allocate objects
+    /// as live (i.e. during concurrent marking or concurrent sweeping).
+    fn init_line_marks_for_clean_block(&self, block: Block) {
+        // FIXME: Why don't we need this for LXR? Conix needs this.
+        // Bulk clear stale line mark state
+        Line::MARK_TABLE.bzero_metadata(block.start(), Block::BYTES);
+        // mark objects if concurrent marking is active
+        if self.should_allocate_as_live() {
+            let state = self.line_mark_state.load(Ordering::Acquire);
+            Line::eager_mark_lines::<VM>(state, block.start_line()..block.end_line());
+            // Objects allocated here are not in the SATB snapshot, log them
+            if self.common().needs_log_bit {
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                    .bulk_mark_as_logged(block.start(), Block::BYTES);
+            }
+        }
+    }
+
+    /// Get the number of pages released by sweeping since the last `Release`.  Sweeping must have
+    /// finished.
+    pub(crate) fn get_pages_released_by_sweeping(&self) -> usize {
+        self.blocks_released_by_sweeping.load(Ordering::Relaxed) << Block::LOG_PAGES
     }
 
     /// Pop a reusable block from the reusable block list.
@@ -1446,6 +1524,12 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             num_defrag_source_blocks
         );
 
+        // Concurrent sweeping does not free chunks (see `SweepChunk::concurrent`).  Free the
+        // chunk now if it has no blocks.  No allocator acquires blocks during `Prepare`.
+        if num_blocks_prepared == 0 {
+            self.space.chunk_map.set_allocated(self.chunk, false);
+        }
+
         self.unlog_bits_op
             .execute::<VM>(self.chunk.start(), Chunk::BYTES);
     }
@@ -1456,6 +1540,12 @@ struct SweepChunk<VM: VMBinding> {
     space: &'static ImmixSpace<VM>,
     chunk: Chunk,
     unlog_bits_op: UnlogBitsOperation,
+    /// `true` if this packet runs concurrently with mutators, which may acquire clean blocks in
+    /// this chunk while we sweep it.  Such blocks are kept alive by their line marks (see
+    /// `ImmixSpace::get_clean_block`), but if we see no live block, we cannot tell whether an
+    /// allocator is about to acquire one, so we leave the chunk allocated and let the next
+    /// `PrepareBlockState` free it.
+    concurrent: bool,
     /// A destructor invoked when all `SweepChunk` packets are finished.
     epilogue: Arc<FlushPageResource<VM>>,
 }
@@ -1530,31 +1620,49 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
         let allocated_blocks = reused_blocks + unreused_blocks;
 
         // Set this chunk as free if there is not live blocks.
-        if allocated_blocks == 0 {
+        if allocated_blocks == 0 && !self.concurrent {
             self.space.chunk_map.set_allocated(self.chunk, false)
         }
         self.space.defrag.add_completed_mark_histogram(histogram);
+        self.space
+            .blocks_released_by_sweeping
+            .fetch_add(swept_blocks, Ordering::Relaxed);
 
         self.unlog_bits_op
             .execute::<VM>(self.chunk.start(), Chunk::BYTES);
 
-        self.epilogue.finish_one_work_packet();
+        if self.concurrent {
+            // Mutators are running.  Let them use the blocks we just swept without waiting for
+            // the epilogue.
+            self.space.flush_page_resource_for_current_worker();
+        }
+
+        self.epilogue.finish_one_work_packet(mmtk);
     }
 }
+
+/// Called by the last sweeping packet when the ImmixSpace has been swept concurrently.  See
+/// [`ImmixSpace::release_for_concurrent_sweeping`].
+pub(crate) type SweepFinishedCallback<VM> = Box<dyn Fn(&'static MMTK<VM>) + Send + Sync>;
 
 /// Count number of remaining work pacets, and flush page resource if all packets are finished.
 struct FlushPageResource<VM: VMBinding> {
     space: &'static ImmixSpace<VM>,
     counter: AtomicUsize,
+    /// Called after flushing if the packets sweep concurrently with mutators.
+    on_finished: Option<SweepFinishedCallback<VM>>,
 }
 
 impl<VM: VMBinding> FlushPageResource<VM> {
     /// Called after a related work packet is finished.
-    fn finish_one_work_packet(&self) {
+    fn finish_one_work_packet(&self, mmtk: &'static MMTK<VM>) {
         if 1 == self.counter.fetch_sub(1, Ordering::SeqCst) {
             // We've finished releasing all the dead blocks to the BlockPageResource's thread-local queues.
             // Now flush the BlockPageResource.
-            self.space.flush_page_resource()
+            self.space.flush_page_resource();
+            if let Some(on_finished) = self.on_finished.as_ref() {
+                on_finished(mmtk);
+            }
         }
     }
 }

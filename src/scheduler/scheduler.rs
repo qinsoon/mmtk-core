@@ -783,19 +783,19 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     pub(super) fn schedule_concurrent_packets(&self, mmtk: &MMTK<VM>) -> bool {
-        // Only LXR defers work into the inactive queue (via `add_deferred`/`bulk_add_deferred`),
-        // so only LXR needs the `Concurrent` bucket's queue flipped here. For every other plan
-        // (e.g. the generic `ConcurrentImmix`), flipping would silently orphan any packets left
-        // in the currently-active queue when a STW pause interrupts an in-progress concurrent
-        // phase: `is_empty()` would check the other (empty) queue and the bucket would be closed
-        // as if drained, even though unprocessed concurrent-marking work is still sitting in the
-        // now-inactive queue. Keep this the same enable/disable-only mechanism as master unless
-        // the plan is LXR.
+        // Packets added with `add_deferred`/`bulk_add_deferred` during the pause wait in the
+        // inactive queue so that the pause does not execute them.  Make them available now.
+        // LXR flips the queues, which also defers the packets left in the active queue to the
+        // next pause.  Other plans must not do that: the `InitialMark` pause of
+        // `ConcurrentImmix` leaves its concurrent marking packets in the active queue, and a
+        // flip would hide them while the bucket looks drained.
         let is_lxr = *mmtk.get_options().plan == PlanSelector::LXR;
-        let enable_bucket = |stage: WorkBucketStage, flip: bool| {
+        let enable_bucket = |stage: WorkBucketStage, activate_deferred: bool| {
             let bucket = &self.work_buckets[stage];
-            if flip && is_lxr {
+            if activate_deferred && is_lxr {
                 bucket.flip();
+            } else if activate_deferred {
+                bucket.activate_deferred();
             }
             if !bucket.is_empty() {
                 bucket.set_enabled(true);

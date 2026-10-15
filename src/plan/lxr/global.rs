@@ -406,15 +406,7 @@ impl<VM: VMBinding> ConcurrentPlan for LXR<VM> {
             super::LazySweepingJobs::all_finished(),
             "Deferred decrement or sweeping jobs outstanding with every GC worker parked and no work left"
         );
-        // Leave `InConcurrentGC`.
-        if self
-            .base()
-            .global_state
-            .gc_status
-            .set_concurrent_gc_finished()
-        {
-            <VM as VMBinding>::VMCollection::concurrent_work_finished_no_pause();
-        }
+        self.finish_concurrent_work_without_pause();
     }
 }
 
